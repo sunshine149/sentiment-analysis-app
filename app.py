@@ -229,14 +229,34 @@ def train_initial_model():
     print(f"模型已保存: {current_model_name}")
 
 
-def train_model_incremental(use_gpu=False):
+def reset_training_status():
+    """重置训练状态"""
+    global training_status
+    training_status = {
+        'is_running': False,
+        'progress': 0,
+        'current_epoch': 0,
+        'total_epochs': 5,
+        'eta_seconds': 0,
+        'message': '空闲',
+        'current_acc': 0,
+        'current_loss': 0,
+        'use_gpu': False
+    }
+
+
+def train_model_incremental(use_gpu=False, epochs=5, batch_size=32):
     """增量训练模型（使用基础数据 + 反馈数据）"""
     global training_in_progress, training_status, current_model, current_vectorizer
-    global current_model_name, current_model_time
+    global current_model_name, current_model_time, training_start_time
+
+    # 重置训练状态
+    reset_training_status()
 
     training_in_progress = True
     training_status['is_running'] = True
     training_status['use_gpu'] = use_gpu
+    training_status['total_epochs'] = epochs
     training_start_time = time.time()
 
     try:
@@ -318,8 +338,7 @@ def train_model_incremental(use_gpu=False):
         X_train_vec = vectorizer.fit_transform(X_train)
         X_val_vec = vectorizer.transform(X_val)
 
-        # 6. 训练模型（分轮次训练）
-        training_status['total_epochs'] = 5
+        # 6. 训练模型（分轮次训练，使用用户指定的epochs）
         training_status['current_epoch'] = 0
 
         # 创建新模型
@@ -336,9 +355,9 @@ def train_model_incremental(use_gpu=False):
         epoch_accuracies = []
         epoch_losses = []
 
-        for epoch in range(5):
+        for epoch in range(epochs):
             training_status['current_epoch'] = epoch + 1
-            training_status['message'] = f'正在训练第 {epoch + 1}/5 轮...'
+            training_status['message'] = f'正在训练第 {epoch + 1}/{epochs} 轮...'
 
             # 训练一个epoch
             if epoch == 0:
@@ -360,10 +379,10 @@ def train_model_incremental(use_gpu=False):
             # 更新训练状态
             elapsed_time = time.time() - training_start_time
             avg_time_per_epoch = elapsed_time / (epoch + 1)
-            remaining_epochs = 5 - (epoch + 1)
+            remaining_epochs = epochs - (epoch + 1)
             eta_seconds = avg_time_per_epoch * remaining_epochs
 
-            training_status['progress'] = ((epoch + 1) / 5) * 100
+            training_status['progress'] = ((epoch + 1) / epochs) * 100
             training_status['eta_seconds'] = eta_seconds
             training_status['current_acc'] = accuracy
             training_status['current_loss'] = loss
@@ -393,6 +412,8 @@ def train_model_incremental(use_gpu=False):
             'base_samples': len(df_base),
             'feedback_samples': len(df_feedback),
             'total_samples': len(df_all),
+            'epochs': epochs,
+            'batch_size': batch_size,
             'epoch_accuracies': [float(acc) for acc in epoch_accuracies],
             'epoch_losses': [float(loss) for loss in epoch_losses],
             'final_accuracy': float(accuracy),
@@ -696,6 +717,15 @@ def train():
     try:
         data = request.json
         use_gpu = data.get('use_gpu', False)
+        epochs = data.get('epochs', 5)
+        batch_size = data.get('batch_size', 32)
+
+        # 验证参数范围
+        if epochs < 1 or epochs > 20:
+            return jsonify({'error': '训练轮数应在1-20之间'}), 400
+
+        if batch_size < 16 or batch_size > 128:
+            return jsonify({'error': '批次大小应在16-128之间'}), 400
 
         # 检查GPU是否可用（这里只是模拟检查）
         gpu_available = False
@@ -714,14 +744,16 @@ def train():
         # 在后台线程中开始训练
         training_thread = threading.Thread(
             target=train_model_incremental,
-            kwargs={'use_gpu': use_gpu}
+            kwargs={'use_gpu': use_gpu, 'epochs': epochs, 'batch_size': batch_size}
         )
         training_thread.daemon = True
         training_thread.start()
 
         return jsonify({
             'message': '训练已开始',
-            'use_gpu_actual': use_gpu and gpu_available
+            'use_gpu_actual': use_gpu and gpu_available,
+            'epochs': epochs,
+            'batch_size': batch_size
         })
 
     except Exception as e:
@@ -749,7 +781,7 @@ def session_end():
         # 异步触发训练
         threading.Thread(
             target=train_model_incremental,
-            kwargs={'use_gpu': False}
+            kwargs={'use_gpu': False, 'epochs': 5, 'batch_size': 32}
         ).start()
         return jsonify({
             'message': f'检测到 {total_feedback} 条唯一有效反馈（共 {total_all} 条唯一反馈），已触发训练',

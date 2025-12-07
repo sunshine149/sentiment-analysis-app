@@ -437,6 +437,7 @@ async function checkGPUStatus() {
 }
 
 // 开始训练
+// 开始训练
 async function startTraining() {
     if (isTraining) {
         showMessage('训练已在运行中', 'warning');
@@ -488,6 +489,11 @@ async function startTraining() {
         elements.stopTrainingBtn.style.display = 'block';
         elements.progressPanel.classList.add('visible');
         updateStatusIndicator(elements.trainingState, 'status-active', '训练中');
+
+        // 重置进度条
+        elements.progressFill.style.width = '0%';
+        elements.progressPercent.textContent = '0%';
+        elements.epochInfo.textContent = `0/${epochs}`;
 
         // 开始轮询训练状态
         startTrainingStatusPolling();
@@ -541,6 +547,7 @@ function startTrainingStatusPolling() {
 }
 
 // 检查训练状态
+// 检查训练状态
 async function checkTrainingStatus() {
     try {
         const response = await fetch(`${API_BASE}/api/train_status`);
@@ -557,6 +564,7 @@ async function checkTrainingStatus() {
         elements.progressPercent.textContent = `${progress.toFixed(1)}%`;
         elements.progressFill.style.width = `${progress}%`;
 
+        // 显示轮次信息，使用后端返回的总轮次和当前轮次
         elements.epochInfo.textContent = `${data.current_epoch || 0}/${data.total_epochs || 5}`;
 
         const etaSeconds = data.eta_seconds || 0;
