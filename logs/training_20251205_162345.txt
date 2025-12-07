@@ -1,0 +1,10 @@
+{
+  "timestamp": "2025-12-05 16:23:45",
+  "model_name": "model_20251205_162345.pkl",
+  "dataset": "initial",
+  "samples": 7766,
+  "accuracy": 0.879021879021879,
+  "f1_score": 0.8770666209419963,
+  "features": 5000,
+  "use_gpu": false
+}

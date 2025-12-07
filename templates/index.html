@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>情感分析应用 (GPU/CPU支持)</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1><i class="fas fa-brain"></i> 中文情感分析系统</h1>
+            <p class="subtitle">基于机器学习的中文文本情感分析 | 支持GPU/CPU训练 | 实时反馈与增量学习</p>
+            <div class="badge">
+                <i class="fas fa-microchip"></i> 支持GPU加速 | <i class="fas fa-database"></i> 微博10万条数据集
+            </div>
+        </header>
+
+        <div class="main-content">
+            <!-- 左侧：分析区域 -->
+            <div class="left-column">
+                <div class="panel">
+                    <h2><i class="fas fa-keyboard"></i> 文本分析</h2>
+
+                    <div class="form-group">
+                        <label for="text-input">输入要分析的文本：</label>
+                        <textarea id="text-input" placeholder="请输入一段中文文本，例如：这部电影真是太精彩了，演员演技出色，剧情扣人心弦！"></textarea>
+                        <div class="char-count">
+                            <span id="char-count">0</span> 字符
+                        </div>
+                    </div>
+
+                    <div class="button-group">
+                        <button class="btn btn-primary" id="analyze-btn">
+                            <i class="fas fa-chart-bar"></i> 分析情感
+                        </button>
+                        <button class="btn btn-secondary" id="clear-btn">
+                            <i class="fas fa-eraser"></i> 清空
+                        </button>
+                    </div>
+                </div>
+
+                <div class="panel" id="result-panel">
+                    <h2><i class="fas fa-poll"></i> 分析结果</h2>
+
+                    <div id="result-container" class="result-container">
+                        <div class="result-item">
+                            <span class="result-label">情感：</span>
+                            <span class="sentiment" id="sentiment-label">等待分析...</span>
+                        </div>
+
+                        <div class="result-item">
+                            <span class="result-label">置信度：</span>
+                            <div class="confidence-container">
+                                <div class="confidence-bar">
+                                    <div class="confidence-fill" id="confidence-fill"></div>
+                                </div>
+                                <span class="confidence-text" id="confidence-text">0%</span>
+                            </div>
+                        </div>
+
+                        <div class="result-item">
+                            <span class="result-label">模型类型：</span>
+                            <span id="model-type">TF-IDF + SGD Classifier</span>
+                        </div>
+
+                        <div class="feedback-section">
+                            <h4>反馈：这个结果准确吗？</h4>
+                            <div class="feedback-buttons">
+                                <button class="feedback-btn feedback-yes" data-choice="符合">
+                                    <i class="fas fa-thumbs-up"></i>
+                                    <span>符合</span>
+                                </button>
+                                <button class="feedback-btn feedback-no" data-choice="不符合">
+                                    <i class="fas fa-thumbs-down"></i>
+                                    <span>不符合</span>
+                                </button>
+                                <button class="feedback-btn feedback-unknown" data-choice="无法判断">
+                                    <i class="fas fa-question-circle"></i>
+                                    <span>无法判断</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <h2><i class="fas fa-info-circle"></i> 当前模型信息</h2>
+
+                    <div class="model-info-grid">
+                        <div class="info-card">
+                            <div class="info-label">模型名称</div>
+                            <div class="info-value" id="current-model-name">未加载</div>
+                        </div>
+                        <div class="info-card">
+                            <div class="info-label">创建时间</div>
+                            <div class="info-value" id="current-model-time">-</div>
+                        </div>
+                        <div class="info-card">
+                            <div class="info-label">特征数量</div>
+                            <div class="info-value" id="current-model-features">-</div>
+                        </div>
+                        <div class="info-card">
+                            <div class="info-label">训练状态</div>
+                            <div class="info-value status-badge" id="model-status-badge">
+                                <span class="status-idle">空闲</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="model-controls">
+                        <button class="btn btn-secondary" id="refresh-model-btn">
+                            <i class="fas fa-sync"></i> 刷新模型信息
+                        </button>
+                        <button class="btn btn-warning" id="reload-model-btn">
+                            <i class="fas fa-redo"></i> 重新加载模型
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 右侧：控制区域 -->
+            <div class="right-column">
+                <div class="panel">
+                    <h2><i class="fas fa-cogs"></i> 模型训练控制</h2>
+
+                    <div class="gpu-check-section">
+                        <div class="form-check">
+                            <input type="checkbox" id="use-gpu-checkbox">
+                            <label for="use-gpu-checkbox">使用GPU训练（如果可用）</label>
+                        </div>
+                        <button class="btn btn-secondary" id="check-gpu-btn">
+                            <i class="fas fa-microchip"></i> 检查GPU状态
+                        </button>
+                        <div class="device-info">
+                            <div class="gpu-indicator" id="gpu-indicator"></div>
+                            <span id="device-info">检测设备中...</span>
+                        </div>
+                    </div>
+
+                    <div class="training-controls">
+                        <div class="train-options">
+                            <div class="option-group">
+                                <label for="epoch-count"><i class="fas fa-redo"></i> 训练轮数</label>
+                                <input type="number" id="epoch-count" value="5" min="1" max="20">
+                            </div>
+                            <div class="option-group">
+                                <label for="batch-size"><i class="fas fa-layer-group"></i> 批次大小</label>
+                                <input type="number" id="batch-size" value="32" min="16" max="128">
+                            </div>
+                        </div>
+
+                        <div class="train-buttons">
+                            <button class="btn btn-train" id="start-training-btn">
+                                <i class="fas fa-play-circle"></i> 开始训练
+                            </button>
+                            <button class="btn btn-danger" id="stop-training-btn" style="display: none;">
+                                <i class="fas fa-stop"></i> 停止训练
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="progress-panel" id="progress-panel">
+                        <div class="progress-header">
+                            <span id="progress-message">训练准备中...</span>
+                            <span id="progress-percent">0%</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progress-fill"></div>
+                        </div>
+                        <div class="progress-details">
+                            <div>
+                                <span>轮次：</span>
+                                <span id="epoch-info">0/0</span>
+                            </div>
+                            <div>
+                                <span>剩余时间：</span>
+                                <span id="eta-info">-</span>
+                            </div>
+                            <div>
+                                <span>准确率：</span>
+                                <span id="current-accuracy">0.00%</span>
+                            </div>
+                            <div>
+                                <span>损失：</span>
+                                <span id="current-loss">0.0000</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <h2><i class="fas fa-exchange-alt"></i> 模型管理</h2>
+
+                    <div class="model-management">
+                        <div class="management-buttons">
+                            <button class="btn btn-secondary" id="list-models-btn">
+                                <i class="fas fa-list"></i> 列出所有模型
+                            </button>
+                            <button class="btn btn-danger" id="rollback-btn">
+                                <i class="fas fa-undo"></i> 回滚到上一个模型
+                            </button>
+                        </div>
+
+                        <div class="model-list-container" id="model-list-container">
+                            <div class="empty-state">
+                                <i class="fas fa-database"></i>
+                                <p>点击"列出所有模型"查看可用模型</p>
+                            </div>
+                        </div>
+
+                        <div class="model-select-section">
+                            <label for="model-select">选择模型：</label>
+                            <select id="model-select" class="form-select"></select>
+                            <button class="btn btn-primary" id="switch-model-btn">
+                                <i class="fas fa-check"></i> 切换到该模型
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <h2><i class="fas fa-chart-line"></i> 系统状态</h2>
+
+                    <div class="status-grid">
+                        <div class="status-card">
+                            <div class="status-label">后端状态</div>
+                            <div class="status-value" id="backend-status">
+                                <span class="status-indicator status-idle"></span>
+                                检查中...
+                            </div>
+                        </div>
+                        <div class="status-card">
+                            <div class="status-label">训练状态</div>
+                            <div class="status-value" id="training-state">
+                                <span class="status-indicator status-idle"></span>
+                                空闲
+                            </div>
+                        </div>
+                        <div class="status-card">
+                            <div class="status-label">反馈数据</div>
+                            <div class="status-value" id="feedback-count">0 条</div>
+                        </div>
+                        <div class="status-card">
+                            <div class="status-label">最后更新</div>
+                            <div class="status-value" id="last-update">-</div>
+                        </div>
+                    </div>
+
+                    <div class="system-controls">
+                        <button class="btn btn-secondary" id="test-api-btn">
+                            <i class="fas fa-vial"></i> 测试API
+                        </button>
+                        <button class="btn btn-warning" id="verify-dataset-btn">
+                            <i class="fas fa-check-circle"></i> 验证数据集
+                        </button>
+                        <button class="btn btn-danger" id="reset-system-btn">
+                            <i class="fas fa-redo"></i> 重置系统
+                        </button>
+                    </div>
+                </div>
+
+                <div class="panel api-test-panel">
+                    <h2><i class="fas fa-code"></i> API测试</h2>
+                    <div class="api-test">
+                        <h3><i class="fas fa-terminal"></i> cURL命令示例</h3>
+                        <pre><code># 预测情感
+curl -X POST http://localhost:5000/api/predict \
+  -H "Content-Type: application/json" \
+  -d '{"text": "这部电影真好看"}'
+
+# 提交反馈
+curl -X POST http://localhost:5000/api/feedback \
+  -H "Content-Type: application/json" \
+  -d '{"text": "这部电影真好看", "choice": "符合"}'
+
+# 开始训练
+curl -X POST http://localhost:5000/api/train \
+  -H "Content-Type: application/json" \
+  -d '{"use_gpu": false}'</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            <p>© 2023 情感分析应用 | 本科课程大作业 | 基于 Flask + Scikit-learn + PyTorch</p>
+            <p>后端API: http://localhost:5000 | 支持GPU/CPU训练 | 实时增量学习</p>
+            <div class="footer-note">
+                <i class="fas fa-exclamation-circle"></i>
+                提示：页面关闭时，如果有足够反馈数据，系统会自动训练模型
+            </div>
+        </footer>
+    </div>
+
+    <!-- 消息提示框 -->
+    <div id="message-toast" class="toast hidden">
+        <div class="toast-content">
+            <span id="toast-message"></span>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
