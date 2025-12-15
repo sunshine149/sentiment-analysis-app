@@ -40,6 +40,12 @@ current_vectorizer = None
 current_model_name = None
 current_model_time = None
 training_in_progress = False
+
+# 新增：训练阈值控制相关变量
+current_feedback_threshold = 0  # 记录上次训练时的反馈数量阈值
+last_training_feedback_count = 0  # 记录上次训练时的反馈数量
+TRAINING_TRIGGER_THRESHOLD = 10  # 触发训练的阈值（10条新反馈）
+
 training_status = {
     'is_running': False,
     'progress': 0,
@@ -126,6 +132,7 @@ def load_latest_model():
 def train_initial_model():
     """训练初始模型"""
     global current_model, current_vectorizer, current_model_name, current_model_time
+    global last_training_feedback_count  # 新增：记录训练时的反馈数量
 
     print("开始训练初始模型...")
 
@@ -210,6 +217,25 @@ def train_initial_model():
     current_model_name = model_path.name
     current_model_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
+    # 更新训练时的反馈数量
+    feedback_count_after_training = count_valid_feedback(unique_only=True)
+    last_training_feedback_count = feedback_count_after_training
+
+    # 保存阈值信息
+    threshold_file = LOGS_DIR / 'training_threshold.txt'
+    threshold_data = {
+        'threshold': current_feedback_threshold,
+        'feedback_count': feedback_count_after_training,
+        'training_time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'model_name': current_model_name,
+        'training_type': 'initial'
+    }
+
+    with open(threshold_file, 'w', encoding='utf-8') as f:
+        json.dump(threshold_data, f, ensure_ascii=False, indent=2)
+
+    print(f"初始训练完成时反馈数量: {feedback_count_after_training}")
+
     # 记录训练日志
     log_entry = {
         'timestamp': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -219,7 +245,8 @@ def train_initial_model():
         'accuracy': float(accuracy),
         'f1_score': float(f1),
         'features': X_train_vec.shape[1],
-        'use_gpu': USE_GPU
+        'use_gpu': USE_GPU,
+        'feedback_count_at_training': feedback_count_after_training
     }
 
     log_file = LOGS_DIR / f'training_{timestamp}.txt'
@@ -249,6 +276,7 @@ def train_model_incremental(use_gpu=False, epochs=5, batch_size=32):
     """增量训练模型（使用基础数据 + 反馈数据）"""
     global training_in_progress, training_status, current_model, current_vectorizer
     global current_model_name, current_model_time, training_start_time
+    global last_training_feedback_count  # 新增：记录训练时的反馈数量
 
     # 重置训练状态
     reset_training_status()
@@ -404,7 +432,26 @@ def train_model_incremental(use_gpu=False, epochs=5, batch_size=32):
         current_model_name = model_path.name
         current_model_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-        # 9. 记录训练日志
+        # 9. 更新训练时的反馈数量（新增）
+        feedback_count_after_training = count_valid_feedback(unique_only=True)
+        last_training_feedback_count = feedback_count_after_training
+
+        # 更新阈值文件
+        threshold_file = LOGS_DIR / 'training_threshold.txt'
+        threshold_data = {
+            'threshold': current_feedback_threshold,
+            'feedback_count': feedback_count_after_training,
+            'training_time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'model_name': current_model_name,
+            'training_type': 'incremental'
+        }
+
+        with open(threshold_file, 'w', encoding='utf-8') as f:
+            json.dump(threshold_data, f, ensure_ascii=False, indent=2)
+
+        print(f"训练完成时反馈数量: {feedback_count_after_training}")
+
+        # 10. 记录训练日志
         log_entry = {
             'timestamp': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'model_name': current_model_name,
@@ -419,7 +466,8 @@ def train_model_incremental(use_gpu=False, epochs=5, batch_size=32):
             'final_accuracy': float(accuracy),
             'final_loss': float(loss),
             'use_gpu': use_gpu,
-            'training_time': time.time() - training_start_time
+            'training_time': time.time() - training_start_time,
+            'feedback_count_at_training': feedback_count_after_training  # 新增
         }
 
         log_file = LOGS_DIR / f'training_{timestamp}.txt'
@@ -708,8 +756,8 @@ def feedback():
 
 @app.route('/api/train', methods=['POST'])
 def train():
-    """开始训练模型"""
-    global training_thread
+    """开始训练模型（手动或自动）"""
+    global training_thread, last_training_feedback_count
 
     if training_in_progress:
         return jsonify({'error': '训练已在进行中'}), 400
@@ -727,7 +775,7 @@ def train():
         if batch_size < 16 or batch_size > 128:
             return jsonify({'error': '批次大小应在16-128之间'}), 400
 
-        # 检查GPU是否可用（这里只是模拟检查）
+        # 检查GPU是否可用
         gpu_available = False
         try:
             import torch
@@ -741,6 +789,9 @@ def train():
                 'use_gpu': False
             })
 
+        # 手动训练时也更新阈值
+        current_count = count_valid_feedback(unique_only=True)
+
         # 在后台线程中开始训练
         training_thread = threading.Thread(
             target=train_model_incremental,
@@ -753,7 +804,8 @@ def train():
             'message': '训练已开始',
             'use_gpu_actual': use_gpu and gpu_available,
             'epochs': epochs,
-            'batch_size': batch_size
+            'batch_size': batch_size,
+            'feedback_count_at_start': current_count
         })
 
     except Exception as e:
@@ -768,34 +820,91 @@ def train_status():
 
 @app.route('/api/session_end', methods=['POST'])
 def session_end():
-    """页面关闭时触发训练"""
-    # 使用去重后的有效反馈统计（与前端保持一致）
-    total_feedback = count_valid_feedback(unique_only=True)
+    """页面关闭时触发训练（满足阈值条件才触发）"""
+    global current_feedback_threshold, last_training_feedback_count
 
-    # 显示详细统计信息
-    total_all = count_all_feedback(unique_only=True)
-    total_valid = total_feedback
+    try:
+        # 获取当前有效的唯一反馈数量
+        current_feedback_count = count_valid_feedback(unique_only=True)
+        total_all = count_all_feedback(unique_only=True)
 
-    # 如果有至少10个有效反馈（去重后），触发训练
-    if total_feedback >= 10 and not training_in_progress:
-        # 异步触发训练
-        threading.Thread(
-            target=train_model_incremental,
-            kwargs={'use_gpu': False, 'epochs': 5, 'batch_size': 32}
-        ).start()
-        return jsonify({
-            'message': f'检测到 {total_feedback} 条唯一有效反馈（共 {total_all} 条唯一反馈），已触发训练',
-            'triggered_training': True,
+        # 读取上次训练的阈值（如果存在）
+        threshold_file = LOGS_DIR / 'training_threshold.txt'
+        if threshold_file.exists():
+            try:
+                with open(threshold_file, 'r', encoding='utf-8') as f:
+                    threshold_data = json.load(f)
+                    current_feedback_threshold = threshold_data.get('threshold', 0)
+                    last_training_feedback_count = threshold_data.get('feedback_count', 0)
+            except:
+                # 如果文件损坏，重置阈值
+                current_feedback_threshold = 0
+                last_training_feedback_count = 0
+
+        # 计算自上次训练以来的新增反馈数量
+        new_feedback_since_last_training = current_feedback_count - last_training_feedback_count
+
+        # 计算需要达到的阈值
+        required_feedback_for_training = current_feedback_threshold + TRAINING_TRIGGER_THRESHOLD
+
+        # 检查是否满足训练条件
+        # 条件1: 当前反馈数量 >= 阈值 + 10
+        # 条件2: 自上次训练以来新增了至少10条反馈
+        # 条件3: 训练不在进行中
+        should_trigger_training = (
+                current_feedback_count >= required_feedback_for_training and
+                new_feedback_since_last_training >= TRAINING_TRIGGER_THRESHOLD and
+                not training_in_progress
+        )
+
+        response_data = {
+            'message': f'当前反馈数量: {current_feedback_count} 条',
             'total_unique_feedback': total_all,
-            'total_unique_valid_feedback': total_feedback
-        })
+            'total_unique_valid_feedback': current_feedback_count,
+            'last_training_feedback_count': last_training_feedback_count,
+            'new_feedback_since_last_training': new_feedback_since_last_training,
+            'current_threshold': current_feedback_threshold,
+            'required_for_next_training': required_feedback_for_training,
+            'triggered_training': False
+        }
 
-    return jsonify({
-        'message': f'有效反馈数据不足 ({total_feedback}/10) 或训练已在运行',
-        'triggered_training': False,
-        'total_unique_feedback': total_all,
-        'total_unique_valid_feedback': total_feedback
-    })
+        if should_trigger_training:
+            # 更新阈值和上次训练时的反馈数量
+            current_feedback_threshold = required_feedback_for_training
+            last_training_feedback_count = current_feedback_count
+
+            # 保存阈值信息
+            threshold_data = {
+                'threshold': current_feedback_threshold,
+                'feedback_count': last_training_feedback_count,
+                'updated_time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'trigger_type': 'auto'
+            }
+
+            with open(threshold_file, 'w', encoding='utf-8') as f:
+                json.dump(threshold_data, f, ensure_ascii=False, indent=2)
+
+            # 异步触发训练
+            threading.Thread(
+                target=train_model_incremental,
+                kwargs={'use_gpu': False, 'epochs': 5, 'batch_size': 32}
+            ).start()
+
+            response_data.update({
+                'triggered_training': True,
+                'message': f'检测到 {new_feedback_since_last_training} 条新反馈（总计 {current_feedback_count} 条），已触发自动训练',
+                'new_threshold_set': current_feedback_threshold
+            })
+            print(f"自动训练触发: {new_feedback_since_last_training} 条新反馈，设置新阈值: {current_feedback_threshold}")
+
+        return jsonify(response_data)
+
+    except Exception as e:
+        print(f"session_end处理失败: {e}")
+        return jsonify({
+            'error': str(e),
+            'triggered_training': False
+        }), 500
 
 
 @app.route('/api/list_models', methods=['GET'])
@@ -878,8 +987,6 @@ def rollback():
     else:
         return jsonify({'error': '回滚失败，没有可用的备份'}), 400
 
-
-# 在 app.py 中添加以下路由
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -1025,6 +1132,43 @@ def feedback_stats():
     })
 
 
+@app.route('/api/training_threshold_info', methods=['GET'])
+def training_threshold_info():
+    """获取训练阈值信息"""
+    try:
+        threshold_file = LOGS_DIR / 'training_threshold.txt'
+
+        if threshold_file.exists():
+            with open(threshold_file, 'r', encoding='utf-8') as f:
+                threshold_data = json.load(f)
+        else:
+            threshold_data = {
+                'threshold': 0,
+                'feedback_count': 0,
+                'updated_time': '从未训练'
+            }
+
+        current_count = count_valid_feedback(unique_only=True)
+        new_feedback_since_last = current_count - threshold_data.get('feedback_count', 0)
+        required_for_next = threshold_data.get('threshold', 0) + TRAINING_TRIGGER_THRESHOLD
+
+        return jsonify({
+            'success': True,
+            'threshold_info': threshold_data,
+            'current_feedback_count': current_count,
+            'new_feedback_since_last_training': new_feedback_since_last,
+            'required_feedback_for_next_training': required_for_next,
+            'remaining_for_next_training': max(0, required_for_next - current_count),
+            'trigger_threshold': TRAINING_TRIGGER_THRESHOLD
+        })
+
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
 if __name__ == '__main__':
     print("=" * 50)
     print("情感分析应用启动")
@@ -1033,16 +1177,35 @@ if __name__ == '__main__':
     print(f"反馈目录: {FEEDBACK_DIR}")
     print("=" * 50)
 
+    # 初始化阈值信息
+    threshold_file = LOGS_DIR / 'training_threshold.txt'
+    if threshold_file.exists():
+        try:
+            with open(threshold_file, 'r', encoding='utf-8') as f:
+                threshold_data = json.load(f)
+                current_feedback_threshold = threshold_data.get('threshold', 0)
+                last_training_feedback_count = threshold_data.get('feedback_count', 0)
+                print(
+                    f"加载阈值信息: 阈值={current_feedback_threshold}, 上次训练时反馈数={last_training_feedback_count}")
+        except Exception as e:
+            print(f"加载阈值信息失败: {e}")
+
     # 显示当前反馈统计
     total_raw = count_all_feedback(unique_only=False)
     total_unique = count_all_feedback(unique_only=True)
     valid_unique = count_valid_feedback(unique_only=True)
+
+    # 计算距离下次训练还需要多少反馈
+    required_for_next = current_feedback_threshold + TRAINING_TRIGGER_THRESHOLD
+    remaining = max(0, required_for_next - valid_unique)
 
     print(f"反馈数据统计:")
     print(f"  原始数据: {total_raw} 条")
     print(f"  去重后: {total_unique} 条")
     print(f"  有效反馈(去重后): {valid_unique} 条")
     print(f"  重复数据: {total_raw - total_unique} 条")
+    print(f"  当前阈值: {current_feedback_threshold}")
+    print(f"  距离下次自动训练还需: {remaining} 条新反馈")
     print("=" * 50)
 
     # 检查并创建必要目录
