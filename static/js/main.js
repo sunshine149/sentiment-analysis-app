@@ -3,6 +3,8 @@ let currentPrediction = null;
 let trainingStatusInterval = null;
 let feedbackCount = 0;
 let isTraining = false;
+let charts = {}; // 存储图表实例
+let modelTypes = {}; // 模型类型信息
 
 // 检测API基地址
 function getApiBase() {
@@ -19,6 +21,7 @@ console.log('API基地址:', API_BASE);
 
 // DOM元素
 const elements = {
+    // 原有元素
     textInput: document.getElementById('text-input'),
     charCount: document.getElementById('char-count'),
     analyzeBtn: document.getElementById('analyze-btn'),
@@ -61,7 +64,31 @@ const elements = {
     lastUpdate: document.getElementById('last-update'),
     testApiBtn: document.getElementById('test-api-btn'),
     verifyDatasetBtn: document.getElementById('verify-dataset-btn'),
-    resetSystemBtn: document.getElementById('reset-system-btn')
+    resetSystemBtn: document.getElementById('reset-system-btn'),
+
+    // 新增元素
+    modelTypeSelect: document.getElementById('model-type-select'),
+    modelDescription: document.getElementById('model-description'),
+    modelInfoCards: document.querySelectorAll('.model-info-card'),
+    refreshChartsBtn: document.getElementById('refresh-charts-btn'),
+    toggleChartsBtn: document.getElementById('toggle-charts-btn'),
+    exportChartsBtn: document.getElementById('export-charts-btn'),
+    trainingModelType: document.getElementById('training-model-type'),
+    currentModelType: document.getElementById('current-model-type'),
+    todayFeedback: document.getElementById('today-feedback'),
+    totalFeedback: document.getElementById('total-feedback'),
+    modelCount: document.getElementById('model-count'),
+    chartStatus: document.getElementById('chart-status'),
+    viewStatsBtn: document.getElementById('view-stats-btn'),
+    statsModal: document.getElementById('stats-modal'),
+    statsContent: document.getElementById('stats-content'),
+    modalClose: document.querySelector('.modal-close'),
+
+    // 图表Canvas元素
+    modelComparisonChart: document.getElementById('modelComparisonChart'),
+    accuracyTrendChart: document.getElementById('accuracyTrendChart'),
+    lossTrendChart: document.getElementById('lossTrendChart'),
+    feedbackGrowthChart: document.getElementById('feedbackGrowthChart')
 };
 
 // 初始化
@@ -88,8 +115,14 @@ async function initializeApp() {
     // 检查GPU状态
     await checkGPUStatus();
 
+    // 加载模型类型信息
+    await loadModelTypes();
+
     // 设置轮询训练状态
     checkTrainingStatus();
+
+    // 加载图表
+    await loadCharts();
 
     // 设置系统状态定时更新
     setInterval(updateSystemStatus, 10000);
@@ -136,6 +169,36 @@ function setupEventListeners() {
         });
     });
 
+    // 模型选择变化
+    elements.modelTypeSelect.addEventListener('change', function() {
+        updateModelDescription(this.value);
+        // 更新卡片选中状态
+        elements.modelInfoCards.forEach(card => {
+            if (card.getAttribute('data-model') === this.value) {
+                card.classList.add('active');
+            } else {
+                card.classList.remove('active');
+            }
+        });
+    });
+
+    // 模型卡片点击
+    elements.modelInfoCards.forEach(card => {
+        card.addEventListener('click', function() {
+            const modelType = this.getAttribute('data-model');
+            elements.modelTypeSelect.value = modelType;
+            updateModelDescription(modelType);
+            // 更新卡片选中状态
+            elements.modelInfoCards.forEach(c => {
+                if (c === this) {
+                    c.classList.add('active');
+                } else {
+                    c.classList.remove('active');
+                }
+            });
+        });
+    });
+
     // 刷新模型信息按钮
     elements.refreshModelBtn.addEventListener('click', refreshModelInfo);
 
@@ -169,6 +232,13 @@ function setupEventListeners() {
     // 重置系统按钮
     elements.resetSystemBtn.addEventListener('click', resetSystem);
 
+    // 图表相关按钮
+    elements.refreshChartsBtn.addEventListener('click', loadCharts);
+    elements.toggleChartsBtn.addEventListener('click', toggleCharts);
+    elements.exportChartsBtn.addEventListener('click', exportCharts);
+    elements.viewStatsBtn.addEventListener('click', showStatsModal);
+    elements.modalClose.addEventListener('click', hideStatsModal);
+
     // 回车键分析（Ctrl+Enter）
     elements.textInput.addEventListener('keydown', function(e) {
         if (e.key === 'Enter' && e.ctrlKey) {
@@ -176,31 +246,677 @@ function setupEventListeners() {
             analyzeText();
         }
     });
+
+    // 点击模态框外部关闭
+    elements.statsModal.addEventListener('click', function(e) {
+        if (e.target === this) {
+            hideStatsModal();
+        }
+    });
 }
 
-function updateCharCount() {
-    const count = elements.textInput.value.length;
-    elements.charCount.textContent = count;
+// 图表相关函数
+async function loadCharts() {
+    try {
+        updateStatusIndicator(elements.chartStatus, 'status-active', '加载中');
+
+        // 加载训练历史数据
+        const response = await fetch(`${API_BASE}/api/training_history`);
+        const data = await response.json();
+
+        if (data.success) {
+            // 创建或更新图表
+            createOrUpdateCharts(data.chart_data, data.model_types);
+            updateStatusIndicator(elements.chartStatus, 'status-ok', '已加载');
+            showMessage('图表已刷新', 'success');
+        } else {
+            throw new Error(data.error || '加载图表数据失败');
+        }
+
+    } catch (error) {
+        console.error('加载图表失败:', error);
+        updateStatusIndicator(elements.chartStatus, 'status-error', '加载失败');
+        showMessage('加载图表失败: ' + error.message, 'error');
+
+        // 如果没有数据，显示空状态
+        showEmptyChartState();
+    }
 }
 
-// 显示消息提示
+function createOrUpdateCharts(chartData, modelTypesData) {
+    // 销毁现有图表
+    Object.values(charts).forEach(chart => {
+        if (chart && chart.destroy) {
+            chart.destroy();
+        }
+    });
+
+    // 重置charts对象
+    charts = {};
+
+    // 模型性能对比图
+    createModelComparisonChart(chartData, modelTypesData);
+
+    // 准确率趋势图
+    createAccuracyTrendChart(chartData);
+
+    // 损失趋势图
+    createLossTrendChart(chartData);
+
+    // 反馈数据增长图
+    createFeedbackGrowthChart(chartData);
+}
+
+function createModelComparisonChart(chartData, modelTypesData) {
+    if (!chartData.model_types || chartData.model_types.length === 0) {
+        showNoDataMessage('modelComparisonChart', '暂无模型对比数据');
+        return;
+    }
+
+    // 按模型类型分组准确率
+    const modelAccuracies = {};
+    chartData.model_types.forEach((type, index) => {
+        if (!modelAccuracies[type]) {
+            modelAccuracies[type] = [];
+        }
+        if (chartData.val_accuracies[index] !== undefined) {
+            modelAccuracies[type].push(chartData.val_accuracies[index]);
+        }
+    });
+
+    // 准备图表数据
+    const labels = Object.keys(modelAccuracies).map(type =>
+        modelTypesData[type]?.name || type
+    );
+
+    const datasets = [{
+        label: '验证准确率',
+        data: Object.values(modelAccuracies).map(accs =>
+            accs.length > 0 ? accs.reduce((a, b) => a + b, 0) / accs.length : 0
+        ),
+        backgroundColor: [
+            'rgba(102, 126, 234, 0.7)',
+            'rgba(0, 176, 155, 0.7)',
+            'rgba(255, 65, 108, 0.7)',
+            'rgba(255, 179, 71, 0.7)'
+        ],
+        borderColor: [
+            'rgb(102, 126, 234)',
+            'rgb(0, 176, 155)',
+            'rgb(255, 65, 108)',
+            'rgb(255, 179, 71)'
+        ],
+        borderWidth: 2
+    }];
+
+    const ctx = elements.modelComparisonChart.getContext('2d');
+    charts.modelComparison = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: datasets
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                title: {
+                    display: true,
+                    text: '模型性能对比'
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            return `平均准确率: ${(context.raw * 100).toFixed(2)}%`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    max: 1,
+                    ticks: {
+                        callback: function(value) {
+                            return (value * 100).toFixed(0) + '%';
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+function createAccuracyTrendChart(chartData) {
+    if (!chartData.timeline || chartData.timeline.length < 2) {
+        showNoDataMessage('accuracyTrendChart', '暂无足够训练历史数据');
+        return;
+    }
+
+    const ctx = elements.accuracyTrendChart.getContext('2d');
+    charts.accuracyTrend = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: chartData.timeline,
+            datasets: [{
+                label: '验证准确率',
+                data: chartData.val_accuracies,
+                borderColor: 'rgb(0, 176, 155)',
+                backgroundColor: 'rgba(0, 176, 155, 0.1)',
+                tension: 0.4,
+                fill: true
+            }, {
+                label: '训练准确率',
+                data: chartData.train_accuracies,
+                borderColor: 'rgb(102, 126, 234)',
+                backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                tension: 0.4,
+                fill: false
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                title: {
+                    display: true,
+                    text: '准确率趋势'
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    max: 1,
+                    ticks: {
+                        callback: function(value) {
+                            return (value * 100).toFixed(0) + '%';
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+function createLossTrendChart(chartData) {
+    if (!chartData.timeline || chartData.timeline.length < 2) {
+        showNoDataMessage('lossTrendChart', '暂无足够训练历史数据');
+        return;
+    }
+
+    const ctx = elements.lossTrendChart.getContext('2d');
+    charts.lossTrend = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: chartData.timeline,
+            datasets: [{
+                label: '损失值',
+                data: chartData.losses,
+                borderColor: 'rgb(255, 65, 108)',
+                backgroundColor: 'rgba(255, 65, 108, 0.1)',
+                tension: 0.4,
+                fill: true
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                title: {
+                    display: true,
+                    text: '损失曲线'
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true
+                }
+            }
+        }
+    });
+}
+
+function createFeedbackGrowthChart(chartData) {
+    if (!chartData.timeline || chartData.timeline.length < 2) {
+        showNoDataMessage('feedbackGrowthChart', '暂无足够反馈数据');
+        return;
+    }
+
+    const ctx = elements.feedbackGrowthChart.getContext('2d');
+    charts.feedbackGrowth = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: chartData.timeline,
+            datasets: [{
+                label: '反馈数量',
+                data: chartData.feedback_counts,
+                backgroundColor: 'rgba(255, 179, 71, 0.7)',
+                borderColor: 'rgb(255, 179, 71)',
+                borderWidth: 1
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                title: {
+                    display: true,
+                    text: '反馈数据增长'
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: {
+                        callback: function(value) {
+                            return value.toFixed(0);
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+function showNoDataMessage(chartId, message) {
+    const container = document.getElementById(chartId.replace('Chart', '-chart'));
+    if (container) {
+        container.innerHTML = `
+            <div class="chart-no-data">
+                <i class="fas fa-chart-bar"></i>
+                <p>${message}</p>
+            </div>
+        `;
+    }
+}
+
+function showEmptyChartState() {
+    ['modelComparisonChart', 'accuracyTrendChart', 'lossTrendChart', 'feedbackGrowthChart'].forEach(chartId => {
+        showNoDataMessage(chartId, '暂无数据，请先进行训练');
+    });
+}
+
+function toggleCharts() {
+    const chartsContainer = document.querySelector('.charts-container');
+    const isExpanded = chartsContainer.classList.contains('expanded');
+
+    if (isExpanded) {
+        chartsContainer.classList.remove('expanded');
+        elements.toggleChartsBtn.innerHTML = '<i class="fas fa-expand"></i> 展开所有';
+    } else {
+        chartsContainer.classList.add('expanded');
+        elements.toggleChartsBtn.innerHTML = '<i class="fas fa-compress"></i> 收起图表';
+    }
+}
+
+function exportCharts() {
+    // 创建包含所有图表的PDF或图片
+    showMessage('图表导出功能开发中...', 'info');
+}
+
+// 模型类型相关函数
+async function loadModelTypes() {
+    try {
+        const response = await fetch(`${API_BASE}/api/model_types`);
+        const data = await response.json();
+
+        if (data.success) {
+            modelTypes = data.model_types;
+            // 更新模型类型显示
+            updateModelTypeSelect();
+        }
+    } catch (error) {
+        console.error('加载模型类型失败:', error);
+        // 如果API不存在，使用默认值
+        modelTypes = {
+            'sgd_tfidf': { name: 'TF-IDF + SGD分类器', description: '传统机器学习方法，速度快，适合小数据' },
+            'random_forest': { name: 'TF-IDF + 随机森林', description: '集成学习方法，抗过拟合能力强' },
+            'svm_tfidf': { name: 'TF-IDF + SVM', description: '支持向量机，适合高维特征' },
+            'logistic_regression': { name: 'TF-IDF + 逻辑回归', description: '简单高效的线性模型' }
+        };
+        updateModelTypeSelect();
+    }
+}
+
+function updateModelTypeSelect() {
+    // 清空现有选项
+    elements.modelTypeSelect.innerHTML = '';
+
+    // 添加新选项
+    for (const [key, info] of Object.entries(modelTypes)) {
+        const option = document.createElement('option');
+        option.value = key;
+        option.textContent = info.name;
+        elements.modelTypeSelect.appendChild(option);
+    }
+
+    // 更新描述
+    updateModelDescription(elements.modelTypeSelect.value);
+}
+
+function updateModelDescription(modelType) {
+    const info = modelTypes[modelType] || {
+        name: '未知模型',
+        description: '暂无描述'
+    };
+    elements.modelDescription.textContent = info.description;
+
+    // 更新模型类型显示
+    elements.currentModelType.textContent = info.name;
+}
+
+// 修改原有函数，支持模型类型
+async function startTraining() {
+    if (isTraining) {
+        showMessage('训练已在运行中', 'warning');
+        return;
+    }
+
+    const useGpu = elements.useGpuCheckbox.checked;
+    const epochs = parseInt(elements.epochCount.value) || 5;
+    const batchSize = parseInt(elements.batchSize.value) || 32;
+    const modelType = elements.modelTypeSelect.value;
+
+    if (epochs < 1 || epochs > 20) {
+        showMessage('训练轮数应在1-20之间', 'error');
+        return;
+    }
+
+    if (batchSize < 16 || batchSize > 128) {
+        showMessage('批次大小应在16-128之间', 'error');
+        return;
+    }
+
+    const modelInfo = modelTypes[modelType] || { name: modelType };
+    if (!confirm(`确定要开始训练吗？\n模型类型: ${modelInfo.name}\n使用GPU: ${useGpu ? '是' : '否'}\n训练轮数: ${epochs}\n批次大小: ${batchSize}`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/api/train`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                use_gpu: useGpu,
+                epochs: epochs,
+                batch_size: batchSize,
+                model_type: modelType
+            })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || '启动训练失败');
+        }
+
+        showMessage(`${modelInfo.name} 训练已开始`, 'success');
+
+        // 更新训练状态
+        isTraining = true;
+        elements.startTrainingBtn.style.display = 'none';
+        elements.stopTrainingBtn.style.display = 'block';
+        elements.progressPanel.classList.add('visible');
+        updateStatusIndicator(elements.trainingState, 'status-active', '训练中');
+
+        // 显示当前训练模型类型
+        elements.trainingModelType.textContent = modelInfo.name;
+
+        // 重置进度条
+        elements.progressFill.style.width = '0%';
+        elements.progressPercent.textContent = '0%';
+        elements.epochInfo.textContent = `0/${epochs}`;
+
+        // 开始轮询训练状态
+        startTrainingStatusPolling();
+
+    } catch (error) {
+        showMessage(error.message, 'error');
+        console.error('启动训练失败:', error);
+    }
+}
+
+// 修改 checkTrainingStatus 函数
+async function checkTrainingStatus() {
+    try {
+        const response = await fetch(`${API_BASE}/api/train_status`);
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error('获取训练状态失败');
+        }
+
+        // 更新训练状态显示
+        elements.progressMessage.textContent = data.message || '训练中...';
+
+        const progress = data.progress || 0;
+        elements.progressPercent.textContent = `${progress.toFixed(1)}%`;
+        elements.progressFill.style.width = `${progress}%`;
+
+        elements.epochInfo.textContent = `${data.current_epoch || 0}/${data.total_epochs || 5}`;
+
+        const etaSeconds = data.eta_seconds || 0;
+        elements.etaInfo.textContent = formatTime(etaSeconds);
+
+        const accuracy = data.current_acc || 0;
+        elements.currentAccuracy.textContent = `${(accuracy * 100).toFixed(2)}%`;
+
+        const loss = data.current_loss || 0;
+        elements.currentLoss.textContent = loss.toFixed(4);
+
+        // 检查训练是否完成
+        if (!data.is_running && isTraining) {
+            // 训练完成
+            isTraining = false;
+            elements.startTrainingBtn.style.display = 'block';
+            elements.stopTrainingBtn.style.display = 'none';
+            updateStatusIndicator(elements.trainingState, 'status-idle', '空闲');
+
+            // 延迟隐藏进度条
+            setTimeout(() => {
+                if (!isTraining) {
+                    elements.progressPanel.classList.remove('visible');
+                    elements.progressFill.style.width = '0%';
+                    elements.progressPercent.textContent = '0%';
+                }
+            }, 3000);
+
+            // 清除轮询
+            if (trainingStatusInterval) {
+                clearInterval(trainingStatusInterval);
+                trainingStatusInterval = null;
+            }
+
+            // 刷新模型信息
+            refreshModelInfo();
+
+            // 刷新图表
+            setTimeout(loadCharts, 1000);
+
+            showMessage('训练完成！', 'success');
+        }
+
+    } catch (error) {
+        console.error('获取训练状态失败:', error);
+    }
+}
+
+// 统计模态框函数
+async function showStatsModal() {
+    try {
+        elements.statsModal.classList.remove('hidden');
+
+        // 加载统计信息
+        const response = await fetch(`${API_BASE}/api/feedback_stats`);
+        const data = await response.json();
+
+        if (data.success) {
+            elements.statsContent.innerHTML = createStatsHTML(data);
+        } else {
+            elements.statsContent.innerHTML = `<div class="error">加载统计信息失败: ${data.error}</div>`;
+        }
+
+    } catch (error) {
+        elements.statsContent.innerHTML = `<div class="error">加载统计信息失败: ${error.message}</div>`;
+    }
+}
+
+function hideStatsModal() {
+    elements.statsModal.classList.add('hidden');
+}
+
+function createStatsHTML(data) {
+    return `
+        <div class="stats-grid">
+            <div class="stats-card">
+                <div class="stats-label">原始反馈总数</div>
+                <div class="stats-value">${data.total_all_raw}</div>
+            </div>
+            <div class="stats-card">
+                <div class="stats-label">去重后总数</div>
+                <div class="stats-value">${data.total_all_unique}</div>
+            </div>
+            <div class="stats-card">
+                <div class="stats-label">有效反馈(去重)</div>
+                <div class="stats-value">${data.total_valid_unique}</div>
+            </div>
+            <div class="stats-card">
+                <div class="stats-label">重复数据</div>
+                <div class="stats-value">${data.duplicate_count}</div>
+            </div>
+        </div>
+        
+        <div class="stats-message">
+            <i class="fas fa-info-circle"></i>
+            ${data.message}
+        </div>
+        
+        <div class="stats-files">
+            <h4>反馈文件列表:</h4>
+            <ul>
+                ${data.feedback_files ? data.feedback_files.map(file => `<li>${file}</li>`).join('') : '<li>暂无反馈文件</li>'}
+            </ul>
+        </div>
+        
+        ${data.file_details ? `
+        <div class="stats-details">
+            <h4>文件详细信息:</h4>
+            <table>
+                <thead>
+                    <tr>
+                        <th>文件名</th>
+                        <th>原始行数</th>
+                        <th>唯一行数</th>
+                        <th>有效行数</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${data.file_details.map(file => `
+                    <tr>
+                        <td>${file.name}</td>
+                        <td>${file.raw_rows}</td>
+                        <td>${file.unique_rows}</td>
+                        <td>${file.valid_rows}</td>
+                    </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+        ` : ''}
+    `;
+}
+
+// 更新原有函数，添加图表相关功能
+async function updateSystemStatus() {
+    updateLastUpdateTime();
+    await checkBackendStatus();
+    await updateFeedbackCount();
+
+    // 更新模型数量
+    try {
+        const response = await fetch(`${API_BASE}/api/list_models`);
+        if (response.ok) {
+            const data = await response.json();
+            if (data.models) {
+                elements.modelCount.textContent = data.models.length;
+            }
+        }
+    } catch (error) {
+        console.error('获取模型数量失败:', error);
+    }
+}
+
+// 修改 updateFeedbackCount 函数
+async function updateFeedbackCount() {
+    try {
+        // 从API获取反馈统计数据
+        const response = await fetch(`${API_BASE}/api/feedback_stats`);
+        if (response.ok) {
+            const data = await response.json();
+            if (data.success) {
+                elements.feedbackCountElement.textContent = `${data.total_valid_unique} 条`;
+                elements.totalFeedback.textContent = data.total_all_unique;
+
+                // 计算今日反馈（简化版）
+                const today = new Date().toISOString().split('T')[0].replace(/-/g, '');
+                const todayFiles = data.feedback_files ? data.feedback_files.filter(file => file.includes(today)) : [];
+                if (todayFiles.length > 0) {
+                    elements.todayFeedback.textContent = '有反馈';
+                } else {
+                    elements.todayFeedback.textContent = '0';
+                }
+            }
+        }
+    } catch (error) {
+        console.error('更新反馈数量失败:', error);
+    }
+}
+
+// 显示消息提示（添加图标）
 function showMessage(message, type = 'info') {
     const toast = document.getElementById('message-toast');
     const toastMessage = document.getElementById('toast-message');
+    const toastIcon = toast.querySelector('i');
 
     toastMessage.textContent = message;
     toast.className = `toast ${type}`;
 
+    // 更新图标
+    const icons = {
+        'info': 'fa-info-circle',
+        'success': 'fa-check-circle',
+        'error': 'fa-exclamation-circle',
+        'warning': 'fa-exclamation-triangle'
+    };
+    toastIcon.className = `fas ${icons[type] || 'fa-info-circle'}`;
+
     // 显示3秒后自动隐藏
+    toast.classList.remove('hidden');
     setTimeout(() => {
         toast.classList.add('hidden');
     }, 3000);
 }
 
-// 更新最后更新时间
-function updateLastUpdateTime() {
-    const now = new Date();
-    elements.lastUpdate.textContent = now.toLocaleString('zh-CN');
+// 修改 updateStatusIndicator 函数
+function updateStatusIndicator(element, statusClass, text) {
+    if (!element) return;
+
+    const indicator = element.querySelector('.status-indicator');
+    if (indicator) {
+        indicator.className = `status-indicator ${statusClass}`;
+        element.innerHTML = `${indicator.outerHTML} ${text}`;
+    } else {
+        element.innerHTML = `<span class="status-indicator ${statusClass}"></span> ${text}`;
+    }
+}
+
+// ========== 以下是原有的辅助函数，需要保留 ==========
+
+function updateCharCount() {
+    const count = elements.textInput.value.length;
+    elements.charCount.textContent = count;
 }
 
 // 检查后端状态
@@ -222,24 +938,6 @@ async function checkBackendStatus() {
         }
     } catch (error) {
         updateStatusIndicator(elements.backendStatus, 'status-error', '连接失败');
-    }
-}
-
-function updateStatusIndicator(element, statusClass, text) {
-    const indicator = element.querySelector('.status-indicator');
-    indicator.className = `status-indicator ${statusClass}`;
-    element.innerHTML = `${indicator.outerHTML} ${text}`;
-}
-
-// 更新反馈数量
-async function updateFeedbackCount() {
-    try {
-        // 从本地存储获取反馈数量（临时方案）
-        const storedCount = localStorage.getItem('feedbackCount') || '0';
-        feedbackCount = parseInt(storedCount);
-        elements.feedbackCountElement.textContent = `${feedbackCount} 条`;
-    } catch (error) {
-        console.error('更新反馈数量失败:', error);
     }
 }
 
@@ -342,7 +1040,7 @@ async function submitFeedback(choice) {
         if (choice === '符合' || choice === '不符合') {
             feedbackCount++;
             localStorage.setItem('feedbackCount', feedbackCount.toString());
-            updateFeedbackCount();
+            await updateFeedbackCount();
         }
 
         // 显示成功消息
@@ -436,74 +1134,6 @@ async function checkGPUStatus() {
     }
 }
 
-// 开始训练
-// 开始训练
-async function startTraining() {
-    if (isTraining) {
-        showMessage('训练已在运行中', 'warning');
-        return;
-    }
-
-    const useGpu = elements.useGpuCheckbox.checked;
-    const epochs = parseInt(elements.epochCount.value) || 5;
-    const batchSize = parseInt(elements.batchSize.value) || 32;
-
-    if (epochs < 1 || epochs > 20) {
-        showMessage('训练轮数应在1-20之间', 'error');
-        return;
-    }
-
-    if (batchSize < 16 || batchSize > 128) {
-        showMessage('批次大小应在16-128之间', 'error');
-        return;
-    }
-
-    if (!confirm(`确定要开始训练吗？\n使用GPU: ${useGpu ? '是' : '否'}\n训练轮数: ${epochs}\n批次大小: ${batchSize}`)) {
-        return;
-    }
-
-    try {
-        const response = await fetch(`${API_BASE}/api/train`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                use_gpu: useGpu,
-                epochs: epochs,
-                batch_size: batchSize
-            })
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-            throw new Error(data.error || '启动训练失败');
-        }
-
-        showMessage('训练已开始', 'success');
-
-        // 更新训练状态
-        isTraining = true;
-        elements.startTrainingBtn.style.display = 'none';
-        elements.stopTrainingBtn.style.display = 'block';
-        elements.progressPanel.classList.add('visible');
-        updateStatusIndicator(elements.trainingState, 'status-active', '训练中');
-
-        // 重置进度条
-        elements.progressFill.style.width = '0%';
-        elements.progressPercent.textContent = '0%';
-        elements.epochInfo.textContent = `0/${epochs}`;
-
-        // 开始轮询训练状态
-        startTrainingStatusPolling();
-
-    } catch (error) {
-        showMessage(error.message, 'error');
-        console.error('启动训练失败:', error);
-    }
-}
-
 // 停止训练
 async function stopTraining() {
     if (!isTraining) {
@@ -544,70 +1174,6 @@ function startTrainingStatusPolling() {
 
     // 设置新的轮询（每秒一次）
     trainingStatusInterval = setInterval(checkTrainingStatus, 1000);
-}
-
-// 检查训练状态
-// 检查训练状态
-async function checkTrainingStatus() {
-    try {
-        const response = await fetch(`${API_BASE}/api/train_status`);
-        const data = await response.json();
-
-        if (!response.ok) {
-            throw new Error('获取训练状态失败');
-        }
-
-        // 更新训练状态显示
-        elements.progressMessage.textContent = data.message || '训练中...';
-
-        const progress = data.progress || 0;
-        elements.progressPercent.textContent = `${progress.toFixed(1)}%`;
-        elements.progressFill.style.width = `${progress}%`;
-
-        // 显示轮次信息，使用后端返回的总轮次和当前轮次
-        elements.epochInfo.textContent = `${data.current_epoch || 0}/${data.total_epochs || 5}`;
-
-        const etaSeconds = data.eta_seconds || 0;
-        elements.etaInfo.textContent = formatTime(etaSeconds);
-
-        const accuracy = data.current_acc || 0;
-        elements.currentAccuracy.textContent = `${(accuracy * 100).toFixed(2)}%`;
-
-        const loss = data.current_loss || 0;
-        elements.currentLoss.textContent = loss.toFixed(4);
-
-        // 检查训练是否完成
-        if (!data.is_running && isTraining) {
-            // 训练完成
-            isTraining = false;
-            elements.startTrainingBtn.style.display = 'block';
-            elements.stopTrainingBtn.style.display = 'none';
-            updateStatusIndicator(elements.trainingState, 'status-idle', '空闲');
-
-            // 延迟隐藏进度条
-            setTimeout(() => {
-                if (!isTraining) {
-                    elements.progressPanel.classList.remove('visible');
-                    elements.progressFill.style.width = '0%';
-                    elements.progressPercent.textContent = '0%';
-                }
-            }, 3000);
-
-            // 清除轮询
-            if (trainingStatusInterval) {
-                clearInterval(trainingStatusInterval);
-                trainingStatusInterval = null;
-            }
-
-            // 刷新模型信息
-            refreshModelInfo();
-
-            showMessage('训练完成！', 'success');
-        }
-
-    } catch (error) {
-        console.error('获取训练状态失败:', error);
-    }
 }
 
 // 格式化时间（秒 -> 时分秒）
@@ -809,7 +1375,7 @@ async function resetSystem() {
         // 清除本地存储的反馈计数
         localStorage.removeItem('feedbackCount');
         feedbackCount = 0;
-        updateFeedbackCount();
+        await updateFeedbackCount();
 
         setTimeout(() => {
             showMessage('系统重置完成，反馈数据已清除', 'success');
@@ -819,13 +1385,6 @@ async function resetSystem() {
     } catch (error) {
         showMessage(`重置失败: ${error.message}`, 'error');
     }
-}
-
-// 更新系统状态
-async function updateSystemStatus() {
-    updateLastUpdateTime();
-    await checkBackendStatus();
-    await updateFeedbackCount();
 }
 
 // 页面关闭处理
@@ -838,6 +1397,12 @@ function handlePageUnload(event) {
     event.returnValue = '页面即将关闭，如有足够反馈数据将自动训练模型';
 }
 
+// 更新最后更新时间
+function updateLastUpdateTime() {
+    const now = new Date();
+    elements.lastUpdate.textContent = now.toLocaleString('zh-CN');
+}
+
 // 添加CSS动画
 const style = document.createElement('style');
 style.textContent = `
@@ -845,6 +1410,200 @@ style.textContent = `
         0% { transform: scale(1); }
         50% { transform: scale(1.05); }
         100% { transform: scale(1); }
+    }
+    
+    /* 新增的动态样式 */
+    .chart-canvas-container {
+        position: relative;
+        height: 200px;
+        width: 100%;
+    }
+
+    .chart-no-data {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 200px;
+        color: #999;
+    }
+
+    .chart-no-data i {
+        font-size: 48px;
+        margin-bottom: 10px;
+        opacity: 0.3;
+    }
+
+    .chart-footer {
+        margin-top: 10px;
+        text-align: center;
+        color: #666;
+        font-size: 0.85rem;
+    }
+
+    /* 模态框样式 */
+    .modal {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.5);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 2000;
+    }
+
+    .modal.hidden {
+        display: none;
+    }
+
+    .modal-content {
+        background: white;
+        border-radius: 15px;
+        width: 90%;
+        max-width: 800px;
+        max-height: 80vh;
+        overflow-y: auto;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    }
+
+    .modal-header {
+        padding: 20px 25px;
+        border-bottom: 2px solid #f0f0f0;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .modal-header h3 {
+        margin: 0;
+        color: #2c3e50;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .modal-close {
+        background: none;
+        border: none;
+        font-size: 1.5rem;
+        cursor: pointer;
+        color: #666;
+        line-height: 1;
+        padding: 0;
+    }
+
+    .modal-body {
+        padding: 25px;
+    }
+
+    /* 统计样式 */
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 15px;
+        margin-bottom: 20px;
+    }
+
+    .stats-card {
+        background: #f8f9fa;
+        border-radius: 10px;
+        padding: 15px;
+        text-align: center;
+        border-left: 4px solid #667eea;
+    }
+
+    .stats-label {
+        font-size: 0.9rem;
+        color: #666;
+        margin-bottom: 5px;
+    }
+
+    .stats-value {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: #2c3e50;
+    }
+
+    .stats-message {
+        background: #f0f9ff;
+        border-radius: 8px;
+        padding: 15px;
+        margin: 15px 0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: #0369a1;
+    }
+
+    .stats-files ul {
+        list-style: none;
+        padding: 0;
+        margin: 10px 0;
+    }
+
+    .stats-files li {
+        padding: 8px 0;
+        border-bottom: 1px solid #f0f0f0;
+        color: #666;
+    }
+
+    .stats-details table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 10px;
+    }
+
+    .stats-details th,
+    .stats-details td {
+        padding: 10px;
+        text-align: left;
+        border-bottom: 1px solid #f0f0f0;
+    }
+
+    .stats-details th {
+        background: #f8f9fa;
+        font-weight: 600;
+        color: #2c3e50;
+    }
+
+    .loading {
+        text-align: center;
+        padding: 40px;
+        color: #666;
+    }
+
+    .error {
+        color: #ff416c;
+        text-align: center;
+        padding: 20px;
+    }
+
+    /* 图表展开状态 */
+    .charts-container.expanded {
+        grid-template-columns: 1fr !important;
+    }
+
+    .charts-container.expanded .chart-placeholder {
+        height: 400px;
+    }
+
+    .charts-container.expanded .chart-canvas-container {
+        height: 300px;
+    }
+
+    /* 响应式调整 */
+    @media (max-width: 768px) {
+        .stats-grid {
+            grid-template-columns: repeat(2, 1fr);
+        }
+        
+        .modal-content {
+            width: 95%;
+            margin: 10px;
+        }
     }
 `;
 document.head.appendChild(style);

@@ -3,17 +3,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>情感分析应用 (GPU/CPU支持)</title>
+    <title>情感分析应用 (多模型支持 + 图表分析)</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
     <div class="container">
         <header>
             <h1><i class="fas fa-brain"></i> 中文情感分析系统</h1>
-            <p class="subtitle">基于机器学习的酒店评论情感分析 | 支持GPU/CPU训练 | 实时反馈与增量学习</p>
+            <p class="subtitle">基于多种机器学习模型 | 支持模型对比与图表分析 | 实时反馈与增量学习</p>
             <div class="badge">
-                <i class="fas fa-microchip"></i> 支持GPU加速 | <i class="fas fa-database"></i> 7000+条酒店评价数据集
+                <i class="fas fa-microchip"></i> 支持多模型训练 |
+                <i class="fas fa-chart-bar"></i> 数据可视化 |
+                <i class="fas fa-database"></i> 7000+条酒店评价数据集
             </div>
         </header>
 
@@ -61,8 +65,13 @@
                         </div>
 
                         <div class="result-item">
-                            <span class="result-label">模型类型：</span>
+                            <span class="result-label">当前模型：</span>
                             <span id="model-type">TF-IDF + SGD Classifier</span>
+                        </div>
+
+                        <div class="result-item">
+                            <span class="result-label">模型类型：</span>
+                            <span id="current-model-type">SGD分类器</span>
                         </div>
 
                         <div class="feedback-section">
@@ -80,6 +89,9 @@
                                     <i class="fas fa-question-circle"></i>
                                     <span>无法判断</span>
                                 </button>
+                            </div>
+                            <div class="feedback-stats">
+                                <small>今日反馈: <span id="today-feedback">0</span> | 总计: <span id="total-feedback">0</span></small>
                             </div>
                         </div>
                     </div>
@@ -122,6 +134,84 @@
 
             <!-- 右侧：控制区域 -->
             <div class="right-column">
+                <!-- 模型选择面板 -->
+                <div class="panel">
+                    <h2><i class="fas fa-project-diagram"></i> 模型选择</h2>
+
+                    <div class="model-selection-section">
+                        <div class="form-group">
+                            <label for="model-type-select"><i class="fas fa-brain"></i> 选择训练模型：</label>
+                            <select id="model-type-select" class="form-select">
+                                <option value="sgd_tfidf">TF-IDF + SGD分类器</option>
+                                <option value="random_forest">TF-IDF + 随机森林</option>
+                                <option value="svm_tfidf">TF-IDF + SVM</option>
+                                <option value="logistic_regression">TF-IDF + 逻辑回归</option>
+                            </select>
+                            <div class="form-hint" id="model-description">
+                                传统机器学习方法，速度快，适合小数据
+                            </div>
+                        </div>
+
+                        <div class="model-info-cards">
+                            <div class="model-info-card active" data-model="sgd_tfidf">
+                                <div class="model-info-header">
+                                    <i class="fas fa-bolt"></i>
+                                    <h4>SGD分类器</h4>
+                                </div>
+                                <div class="model-info-body">
+                                    <p>速度快，适合在线学习</p>
+                                    <div class="model-tags">
+                                        <span class="tag">快速</span>
+                                        <span class="tag">增量学习</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="model-info-card" data-model="random_forest">
+                                <div class="model-info-header">
+                                    <i class="fas fa-tree"></i>
+                                    <h4>随机森林</h4>
+                                </div>
+                                <div class="model-info-body">
+                                    <p>集成学习，抗过拟合</p>
+                                    <div class="model-tags">
+                                        <span class="tag">稳定</span>
+                                        <span class="tag">抗过拟合</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="model-info-card" data-model="svm_tfidf">
+                                <div class="model-info-header">
+                                    <i class="fas fa-vector-square"></i>
+                                    <h4>SVM</h4>
+                                </div>
+                                <div class="model-info-body">
+                                    <p>支持向量机，适合高维</p>
+                                    <div class="model-tags">
+                                        <span class="tag">高维</span>
+                                        <span class="tag">边界清晰</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="model-info-card" data-model="logistic_regression">
+                                <div class="model-info-header">
+                                    <i class="fas fa-chart-line"></i>
+                                    <h4>逻辑回归</h4>
+                                </div>
+                                <div class="model-info-body">
+                                    <p>简单高效，可解释性强</p>
+                                    <div class="model-tags">
+                                        <span class="tag">简单</span>
+                                        <span class="tag">可解释</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="panel">
                     <h2><i class="fas fa-cogs"></i> 模型训练控制</h2>
 
@@ -186,6 +276,80 @@
                                 <span>损失：</span>
                                 <span id="current-loss">0.0000</span>
                             </div>
+                            <div>
+                                <span>当前模型：</span>
+                                <span id="training-model-type">SGD</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel chart-panel">
+                    <h2><i class="fas fa-chart-bar"></i> 训练分析图表</h2>
+
+                    <div class="chart-controls">
+                        <button class="btn btn-secondary" id="refresh-charts-btn">
+                            <i class="fas fa-sync"></i> 刷新图表
+                        </button>
+                        <button class="btn btn-secondary" id="toggle-charts-btn">
+                            <i class="fas fa-expand"></i> 展开所有
+                        </button>
+                        <button class="btn btn-secondary" id="export-charts-btn">
+                            <i class="fas fa-download"></i> 导出图表
+                        </button>
+                    </div>
+
+                    <div class="charts-container">
+                        <!-- 模型对比图表 -->
+                        <div class="chart-placeholder" id="model-comparison-chart">
+                            <div class="chart-header">
+                                <h4><i class="fas fa-balance-scale"></i> 模型性能对比</h4>
+                            </div>
+                            <div class="chart-canvas-container">
+                                <canvas id="modelComparisonChart"></canvas>
+                            </div>
+                            <div class="chart-footer">
+                                <small>显示最近10次训练的模型性能对比</small>
+                            </div>
+                        </div>
+
+                        <!-- 训练历史图表 -->
+                        <div class="chart-placeholder" id="training-history-chart">
+                            <div class="chart-header">
+                                <h4><i class="fas fa-history"></i> 准确率趋势</h4>
+                            </div>
+                            <div class="chart-canvas-container">
+                                <canvas id="accuracyTrendChart"></canvas>
+                            </div>
+                            <div class="chart-footer">
+                                <small>显示最近训练准确率变化趋势</small>
+                            </div>
+                        </div>
+
+                        <!-- 损失曲线图表 -->
+                        <div class="chart-placeholder" id="loss-trend-chart">
+                            <div class="chart-header">
+                                <h4><i class="fas fa-chart-line"></i> 损失曲线</h4>
+                            </div>
+                            <div class="chart-canvas-container">
+                                <canvas id="lossTrendChart"></canvas>
+                            </div>
+                            <div class="chart-footer">
+                                <small>显示训练损失变化趋势</small>
+                            </div>
+                        </div>
+
+                        <!-- 反馈数据图表 -->
+                        <div class="chart-placeholder" id="feedback-growth-chart">
+                            <div class="chart-header">
+                                <h4><i class="fas fa-database"></i> 反馈数据增长</h4>
+                            </div>
+                            <div class="chart-canvas-container">
+                                <canvas id="feedbackGrowthChart"></canvas>
+                            </div>
+                            <div class="chart-footer">
+                                <small>显示反馈数据随时间增长情况</small>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -246,6 +410,17 @@
                             <div class="status-label">最后更新</div>
                             <div class="status-value" id="last-update">-</div>
                         </div>
+                        <div class="status-card">
+                            <div class="status-label">模型数量</div>
+                            <div class="status-value" id="model-count">0</div>
+                        </div>
+                        <div class="status-card">
+                            <div class="status-label">图表状态</div>
+                            <div class="status-value" id="chart-status">
+                                <span class="status-indicator status-idle"></span>
+                                未加载
+                            </div>
+                        </div>
                     </div>
 
                     <div class="system-controls">
@@ -257,6 +432,9 @@
                         </button>
                         <button class="btn btn-danger" id="reset-system-btn">
                             <i class="fas fa-redo"></i> 重置系统
+                        </button>
+                        <button class="btn btn-info" id="view-stats-btn">
+                            <i class="fas fa-chart-pie"></i> 查看统计
                         </button>
                     </div>
                 </div>
@@ -275,18 +453,21 @@ curl -X POST http://localhost:5000/api/feedback \
   -H "Content-Type: application/json" \
   -d '{"text": "这家酒店真不错", "choice": "符合"}'
 
-# 开始训练
+# 开始训练（指定模型类型）
 curl -X POST http://localhost:5000/api/train \
   -H "Content-Type: application/json" \
-  -d '{"use_gpu": false}'</code></pre>
+  -d '{"use_gpu": false, "model_type": "random_forest"}'
+
+# 获取训练历史
+curl -X GET http://localhost:5000/api/training_history</code></pre>
                     </div>
                 </div>
             </div>
         </div>
 
         <footer>
-            <p>© 2025 情感分析应用 | 人工智能应用课程大作业 | 基于 Flask + Scikit-learn + PyTorch</p>
-            <p>后端API: http://localhost:5000 | 支持GPU/CPU训练 | 实时增量学习</p>
+            <p>© 2025 情感分析应用 | 人工智能应用课程大作业 | 支持多模型对比与图表分析</p>
+            <p>后端API: http://localhost:5000 | 支持4种机器学习模型 | 实时数据可视化</p>
             <div class="footer-note">
                 <i class="fas fa-exclamation-circle"></i>
                 提示：页面关闭时，如果有足够反馈数据，系统会自动训练模型
@@ -297,7 +478,25 @@ curl -X POST http://localhost:5000/api/train \
     <!-- 消息提示框 -->
     <div id="message-toast" class="toast hidden">
         <div class="toast-content">
+            <i class="fas fa-info-circle"></i>
             <span id="toast-message"></span>
+        </div>
+    </div>
+
+    <!-- 统计模态框 -->
+    <div id="stats-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-chart-pie"></i> 详细统计信息</h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="stats-content">
+                    <div class="loading">
+                        <i class="fas fa-spinner fa-spin"></i> 加载统计信息...
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
