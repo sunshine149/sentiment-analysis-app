@@ -1,7 +1,7 @@
 {
   "threshold": 30,
-  "feedback_count": 90,
-  "training_time": "2025-12-15 16:49:02",
-  "model_name": "model_20251215_164901.pkl",
+  "feedback_count": 94,
+  "training_time": "2025-12-27 02:58:09",
+  "model_name": "model_sgd_tfidf_20251227_025808.pkl",
   "training_type": "incremental"
 }

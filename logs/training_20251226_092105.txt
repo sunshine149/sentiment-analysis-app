@@ -1,0 +1,25 @@
+{
+  "timestamp": "2025-12-26 09:21:05",
+  "model_name": "model_20251226_092105.pkl",
+  "dataset": "incremental",
+  "base_samples": 7766,
+  "feedback_samples": 90,
+  "total_samples": 7856,
+  "epochs": 3,
+  "batch_size": 32,
+  "epoch_accuracies": [
+    0.8918575063613231,
+    0.8880407124681934,
+    0.8867684478371501
+  ],
+  "epoch_losses": [
+    0.30280207536714815,
+    0.30390040425676323,
+    0.3043685648864482
+  ],
+  "final_accuracy": 0.8867684478371501,
+  "final_loss": 0.3043685648864482,
+  "use_gpu": true,
+  "training_time": 8.501354455947876,
+  "feedback_count_at_training": 90
+}

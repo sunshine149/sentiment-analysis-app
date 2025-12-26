@@ -1,0 +1,83 @@
+[
+  {
+    "timestamp": "2025-12-27 02:55:20",
+    "model_type": "sgd_tfidf",
+    "model_name": "model_sgd_tfidf_20251227_025519.pkl",
+    "epochs": 3,
+    "final_val_accuracy": 0.8880407124681934,
+    "final_train_accuracy": 0.9301569348225647,
+    "final_loss": 0.3120195428403941,
+    "epoch_accuracies": [
+      0.8829516539440203,
+      0.8893129770992366,
+      0.8880407124681934
+    ],
+    "epoch_losses": [
+      0.3124483641158925,
+      0.31173736468986896,
+      0.3120195428403941
+    ],
+    "val_accuracies": [
+      0.8829516539440203,
+      0.8893129770992366,
+      0.8880407124681934
+    ],
+    "train_accuracies": [
+      0.9256326876855648,
+      0.9297327866534709,
+      0.9301569348225647
+    ],
+    "feedback_count": 93,
+    "use_gpu": true
+  },
+  {
+    "timestamp": "2025-12-27 02:56:51",
+    "model_type": "sgd_tfidf",
+    "model_name": "model_sgd_tfidf_20251227_025651.pkl",
+    "epochs": 1,
+    "final_val_accuracy": 0.8829516539440203,
+    "final_train_accuracy": 0.9256326876855648,
+    "final_loss": 0.3124483641158925,
+    "epoch_accuracies": [
+      0.8829516539440203
+    ],
+    "epoch_losses": [
+      0.3124483641158925
+    ],
+    "val_accuracies": [
+      0.8829516539440203
+    ],
+    "train_accuracies": [
+      0.9256326876855648
+    ],
+    "feedback_count": 93,
+    "use_gpu": true
+  },
+  {
+    "timestamp": "2025-12-27 02:58:09",
+    "model_type": "sgd_tfidf",
+    "model_name": "model_sgd_tfidf_20251227_025808.pkl",
+    "epochs": 2,
+    "final_val_accuracy": 0.8905852417302799,
+    "final_train_accuracy": 0.9339836019225333,
+    "final_loss": 0.31149363264682906,
+    "epoch_accuracies": [
+      0.8854961832061069,
+      0.8905852417302799
+    ],
+    "epoch_losses": [
+      0.3114297290121964,
+      0.31149363264682906
+    ],
+    "val_accuracies": [
+      0.8854961832061069,
+      0.8905852417302799
+    ],
+    "train_accuracies": [
+      0.9329940627650551,
+      0.9339836019225333
+    ],
+    "feedback_count": 94,
+    "use_gpu": true
+  }
+]

@@ -105,8 +105,8 @@ def load_latest_model():
     """加载最新的模型"""
     global current_model, current_vectorizer, current_model_name, current_model_time
 
+    # 查找所有模型文件
     model_files = list(MODELS_DIR.glob('model_*.pkl'))
-    vectorizer_files = list(MODELS_DIR.glob('vectorizer_*.pkl'))
 
     if not model_files:
         print("未找到模型，将训练初始模型...")
@@ -117,16 +117,43 @@ def load_latest_model():
     model_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
     latest_model = model_files[0]
 
-    # 找到对应的向量器
-    timestamp = latest_model.stem.split('_')[1] + '_' + latest_model.stem.split('_')[2]
-    vectorizer_pattern = f'vectorizer_{timestamp}.pkl'
+    # 根据文件名确定模型类型
+    model_filename = latest_model.name
+    print(f"找到最新模型文件: {model_filename}")
+
+    # 解析文件名以获取向量器文件名
+    # 格式可能是: model_sgd_tfidf_20250101_120000.pkl 或 model_20250101_120000.pkl
+    parts = model_filename.replace('model_', '').replace('.pkl', '').split('_')
+
+    if len(parts) >= 3:
+        # 新格式: model_type_timestamp
+        model_type = parts[0]  # 如: sgd_tfidf
+        timestamp = f"{parts[1]}_{parts[2]}"  # 如: 20250101_120000
+        vectorizer_pattern = f'vectorizer_{model_type}_{timestamp}.pkl'
+    else:
+        # 旧格式: timestamp
+        timestamp = f"{parts[0]}_{parts[1]}"
+        vectorizer_pattern = f'vectorizer_{timestamp}.pkl'
+
+    print(f"查找向量器文件: {vectorizer_pattern}")
     vectorizer_files = list(MODELS_DIR.glob(vectorizer_pattern))
 
     if not vectorizer_files:
         print(f"警告: 找不到与模型匹配的向量器文件 {vectorizer_pattern}")
+        print("尝试查找其他格式的向量器文件...")
+        # 尝试其他可能的格式
+        for ext in ['.pkl', '.joblib']:
+            pattern = f'*vectorizer*{timestamp}*{ext}'
+            vectorizer_files = list(MODELS_DIR.glob(pattern))
+            if vectorizer_files:
+                break
+
+    if not vectorizer_files:
+        print(f"错误: 找不到任何向量器文件")
         return
 
     latest_vectorizer = vectorizer_files[0]
+    print(f"找到向量器文件: {latest_vectorizer.name}")
 
     try:
         current_model = joblib.load(latest_model)
@@ -476,8 +503,8 @@ def train_model_incremental(use_gpu=False, epochs=5, batch_size=32, model_type='
 
         # 7. 保存新模型（在文件名中加入模型类型）
         timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-        model_path = MODELS_DIR / f'model_{model_type}_{timestamp}.pkl'
-        vectorizer_path = MODELS_DIR / f'vectorizer_{model_type}_{timestamp}.pkl'
+        model_path = MODELS_DIR / f'model_{timestamp}.pkl'
+        vectorizer_path = MODELS_DIR / f'vectorizer_{timestamp}.pkl'
 
         joblib.dump(model, model_path)
         joblib.dump(vectorizer, vectorizer_path)
@@ -615,17 +642,47 @@ def list_available_models():
     models = []
 
     for model_file in sorted(model_files, key=lambda x: x.stat().st_mtime, reverse=True):
-        timestamp = model_file.stem.split('_')[1] + '_' + model_file.stem.split('_')[2]
+        model_filename = model_file.name
         create_time = datetime.datetime.fromtimestamp(model_file.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
 
         # 检查是否有对应的向量器
-        vectorizer_pattern = f'vectorizer_{timestamp}.pkl'
-        vectorizer_files = list(MODELS_DIR.glob(vectorizer_pattern))
+        has_vectorizer = False
+
+        # 尝试多种可能的向量器文件名
+        base_name = model_filename.replace('model_', '').replace('.pkl', '')
+        parts = base_name.split('_')
+
+        possible_vectorizer_names = []
+        if len(parts) >= 3:
+            # 新格式
+            model_type = parts[0]
+            timestamp = f"{parts[1]}_{parts[2]}"
+            possible_vectorizer_names.append(f'vectorizer_{model_type}_{timestamp}.pkl')
+        else:
+            # 旧格式
+            timestamp = f"{parts[0]}_{parts[1]}"
+            possible_vectorizer_names.append(f'vectorizer_{timestamp}.pkl')
+
+        # 添加通配符搜索
+        possible_vectorizer_names.append(f'*vectorizer*{timestamp}*.pkl')
+        possible_vectorizer_names.append(f'*vectorizer*{base_name}*.pkl')
+
+        for pattern in possible_vectorizer_names:
+            vectorizer_files = list(MODELS_DIR.glob(pattern))
+            if vectorizer_files:
+                has_vectorizer = True
+                break
+
+        # 获取模型类型
+        model_type = 'sgd_tfidf'  # 默认
+        if len(parts) >= 3:
+            model_type = parts[0]
 
         models.append({
-            'name': model_file.name,
+            'name': model_filename,
             'time': create_time,
-            'has_vectorizer': len(vectorizer_files) > 0
+            'has_vectorizer': has_vectorizer,
+            'model_type': model_type
         })
 
     return models
@@ -640,14 +697,40 @@ def switch_to_model(model_name):
     if not model_path.exists():
         return False, "模型文件不存在"
 
-    # 提取时间戳
+    # 提取时间戳和模型类型
     try:
-        timestamp = model_name.split('_')[1] + '_' + model_name.split('_')[2].replace('.pkl', '')
-        vectorizer_name = f'vectorizer_{timestamp}.pkl'
+        # 解析文件名
+        base_name = model_name.replace('model_', '').replace('.pkl', '')
+        parts = base_name.split('_')
+
+        if len(parts) >= 3:
+            # 新格式: model_type_timestamp
+            model_type = parts[0]
+            timestamp = f"{parts[1]}_{parts[2]}"
+            vectorizer_name = f'vectorizer_{model_type}_{timestamp}.pkl'
+        else:
+            # 旧格式: timestamp
+            timestamp = f"{parts[0]}_{parts[1]}"
+            vectorizer_name = f'vectorizer_{timestamp}.pkl'
+
         vectorizer_path = MODELS_DIR / vectorizer_name
 
         if not vectorizer_path.exists():
-            return False, f"找不到对应的向量器文件: {vectorizer_name}"
+            # 尝试查找其他可能的向量器文件
+            found = False
+            for pattern in [
+                f'vectorizer_{timestamp}.pkl',
+                f'*vectorizer*{timestamp}*.pkl',
+                f'*vectorizer*{model_name.replace("model_", "")}'
+            ]:
+                vectorizer_files = list(MODELS_DIR.glob(pattern))
+                if vectorizer_files:
+                    vectorizer_path = vectorizer_files[0]
+                    found = True
+                    break
+
+            if not found:
+                return False, f"找不到对应的向量器文件"
 
         # 加载模型
         current_model = joblib.load(model_path)
@@ -669,8 +752,11 @@ def count_all_feedback(unique_only=True):
     """统计所有反馈数据"""
     feedback_files = list(FEEDBACK_DIR.glob('*.csv'))
 
+    if not feedback_files:
+        return 0
+
     if unique_only:
-        # 去重统计（与前端保持一致）
+        # 去重统计
         all_texts = set()
         for f in feedback_files:
             try:
@@ -679,7 +765,8 @@ def count_all_feedback(unique_only=True):
                     # 清理文本：去除空格，统一格式
                     texts = df['text'].dropna().astype(str).str.strip().tolist()
                     all_texts.update(texts)
-            except:
+            except Exception as e:
+                print(f"读取反馈文件 {f} 失败: {e}")
                 continue
         return len(all_texts)
     else:
@@ -689,7 +776,8 @@ def count_all_feedback(unique_only=True):
             try:
                 df = pd.read_csv(f)
                 total_rows += len(df)
-            except:
+            except Exception as e:
+                print(f"读取反馈文件 {f} 失败: {e}")
                 continue
         return total_rows
 
@@ -698,8 +786,11 @@ def count_valid_feedback(unique_only=True):
     """统计有效反馈数据（仅符合和不符合）"""
     feedback_files = list(FEEDBACK_DIR.glob('*.csv'))
 
+    if not feedback_files:
+        return 0
+
     if unique_only:
-        # 去重统计（与前端保持一致）
+        # 去重统计
         valid_texts = set()
         for f in feedback_files:
             try:
@@ -708,7 +799,8 @@ def count_valid_feedback(unique_only=True):
                     valid_df = df[df['choice'].isin(['符合', '不符合'])]
                     texts = valid_df['text'].dropna().astype(str).str.strip().tolist()
                     valid_texts.update(texts)
-            except:
+            except Exception as e:
+                print(f"读取反馈文件 {f} 失败: {e}")
                 continue
         return len(valid_texts)
     else:
@@ -720,7 +812,8 @@ def count_valid_feedback(unique_only=True):
                 if 'choice' in df.columns:
                     valid_feedback = df[df['choice'].isin(['符合', '不符合'])]
                     total_valid += len(valid_feedback)
-            except:
+            except Exception as e:
+                print(f"读取反馈文件 {f} 失败: {e}")
                 continue
         return total_valid
 
@@ -1286,39 +1379,48 @@ def test_api():
 
 @app.route('/api/feedback_stats', methods=['GET'])
 def feedback_stats():
-    """获取反馈数据统计（显示去重前后的对比）"""
-    total_all_unique = count_all_feedback(unique_only=True)  # 去重后
-    total_all_raw = count_all_feedback(unique_only=False)  # 原始
-    total_valid_unique = count_valid_feedback(unique_only=True)  # 有效去重后
-    total_valid_raw = count_valid_feedback(unique_only=False)  # 有效原始
+    """获取反馈数据统计"""
+    try:
+        total_all_raw = count_all_feedback(unique_only=False)  # 原始
+        total_all_unique = count_all_feedback(unique_only=True)  # 去重后
+        total_valid_raw = count_valid_feedback(unique_only=False)  # 有效原始
+        total_valid_unique = count_valid_feedback(unique_only=True)  # 有效去重后
 
-    feedback_files = list(FEEDBACK_DIR.glob('*.csv'))
+        feedback_files = list(FEEDBACK_DIR.glob('*.csv'))
 
-    # 文件详细信息
-    file_details = []
-    for file in feedback_files:
-        try:
-            df = pd.read_csv(file)
-            file_details.append({
-                'name': file.name,
-                'raw_rows': len(df),
-                'unique_rows': len(df['text'].dropna().astype(str).str.strip().unique()) if 'text' in df.columns else 0,
-                'valid_rows': len(df[df['choice'].isin(['符合', '不符合'])]) if 'choice' in df.columns else 0
-            })
-        except:
-            continue
+        # 文件详细信息
+        file_details = []
+        for file in feedback_files:
+            try:
+                df = pd.read_csv(file)
+                file_details.append({
+                    'name': file.name,
+                    'raw_rows': len(df),
+                    'unique_rows': len(df['text'].dropna().astype(str).str.strip().unique()) if 'text' in df.columns else 0,
+                    'valid_rows': len(df[df['choice'].isin(['符合', '不符合'])]) if 'choice' in df.columns else 0
+                })
+            except Exception as e:
+                print(f"读取反馈文件 {file} 失败: {e}")
+                continue
 
-    return jsonify({
-        'total_all_raw': total_all_raw,  # 原始总数：66
-        'total_all_unique': total_all_unique,  # 去重后总数：63
-        'total_valid_raw': total_valid_raw,  # 原始有效数：66
-        'total_valid_unique': total_valid_unique,  # 去重后有效数：63
-        'duplicate_count': total_all_raw - total_all_unique,  # 重复数：3
-        'unclassified_count': total_all_unique - total_valid_unique,  # 无法判断数：0
-        'feedback_files': [f.name for f in feedback_files],
-        'file_details': file_details,
-        'message': f'共收到 {total_all_raw} 条反馈，去重后 {total_all_unique} 条唯一反馈，其中 {total_valid_unique} 条有效反馈'
-    })
+        return jsonify({
+            'success': True,
+            'total_all_raw': total_all_raw,
+            'total_all_unique': total_all_unique,
+            'total_valid_raw': total_valid_raw,
+            'total_valid_unique': total_valid_unique,
+            'duplicate_count': total_all_raw - total_all_unique,
+            'unclassified_count': total_all_unique - total_valid_unique,
+            'feedback_files': [f.name for f in feedback_files],
+            'file_details': file_details,
+            'message': f'共收到 {total_all_raw} 条反馈，去重后 {total_all_unique} 条唯一反馈，其中 {total_valid_unique} 条有效反馈'
+        })
+
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 
 @app.route('/api/training_threshold_info', methods=['GET'])
@@ -1386,6 +1488,7 @@ def get_training_charts():
             'error': str(e)
         })
 
+
 @app.route('/api/training_history', methods=['GET'])
 def get_training_history():
     """获取训练历史数据（用于前端图表）"""
@@ -1393,12 +1496,15 @@ def get_training_history():
         # 加载训练历史
         history_file = LOGS_DIR / 'training_history.json'
         if history_file.exists():
-            with open(history_file, 'r', encoding='utf-8') as f:
-                history_data = json.load(f)
+            try:
+                with open(history_file, 'r', encoding='utf-8') as f:
+                    history_data = json.load(f)
+            except:
+                history_data = []
         else:
             history_data = []
 
-        # 准备图表数据
+        # 准备图表数据（简化版，实际应根据历史数据生成）
         chart_data = {
             'timeline': [],
             'val_accuracies': [],
@@ -1408,34 +1514,72 @@ def get_training_history():
             'model_types': []
         }
 
-        for entry in history_data[-20:]:  # 最近20次
-            chart_data['timeline'].append(entry['timestamp'][11:19])  # 只取时间
-            chart_data['val_accuracies'].append(entry['final_val_accuracy'])
+        # 如果有历史数据，填充图表数据
+        for entry in history_data[-10:]:  # 最近10次
+            chart_data['timeline'].append(entry.get('timestamp', '')[-8:])  # 只取时间
+            chart_data['val_accuracies'].append(entry.get('final_val_accuracy', 0))
             chart_data['train_accuracies'].append(entry.get('final_train_accuracy', 0))
-            chart_data['losses'].append(entry['final_loss'])
-            chart_data['feedback_counts'].append(entry['feedback_count'])
-            chart_data['model_types'].append(entry['model_type'])
+            chart_data['losses'].append(entry.get('final_loss', 0))
+            chart_data['feedback_counts'].append(entry.get('feedback_count', 0))
+            chart_data['model_types'].append(entry.get('model_type', 'unknown'))
 
         return jsonify({
             'success': True,
             'history': history_data[-10:],  # 返回最近10次详细记录
             'chart_data': chart_data,
-            'model_types': MODEL_TYPES
+            'model_types': {
+                'sgd_tfidf': {'name': 'SGD分类器'},
+                'random_forest': {'name': '随机森林'},
+                'svm_tfidf': {'name': 'SVM'},
+                'logistic_regression': {'name': '逻辑回归'},
+                'unknown': {'name': '未知'}
+            }
         })
 
     except Exception as e:
         return jsonify({
             'success': False,
             'error': str(e)
-        })
+        }), 500
+
 
 @app.route('/api/model_types', methods=['GET'])
 def get_model_types():
     """获取可用的模型类型"""
-    return jsonify({
-        'success': True,
-        'model_types': MODEL_TYPES
-    })
+    try:
+        model_types = {
+            'sgd_tfidf': {
+                'name': 'TF-IDF + SGD分类器',
+                'description': '传统机器学习方法，速度快，适合小数据',
+                'requires_vectorizer': True
+            },
+            'random_forest': {
+                'name': 'TF-IDF + 随机森林',
+                'description': '集成学习方法，抗过拟合能力强',
+                'requires_vectorizer': True
+            },
+            'svm_tfidf': {
+                'name': 'TF-IDF + SVM',
+                'description': '支持向量机，适合高维特征',
+                'requires_vectorizer': True
+            },
+            'logistic_regression': {
+                'name': 'TF-IDF + 逻辑回归',
+                'description': '简单高效的线性模型',
+                'requires_vectorizer': True
+            }
+        }
+
+        return jsonify({
+            'success': True,
+            'model_types': model_types
+        })
+
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 
 if __name__ == '__main__':
