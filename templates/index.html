@@ -11,9 +11,9 @@
     <div class="container">
         <header>
             <h1><i class="fas fa-brain"></i> 中文情感分析系统</h1>
-            <p class="subtitle">基于机器学习的中文文本情感分析 | 支持GPU/CPU训练 | 实时反馈与增量学习</p>
+            <p class="subtitle">基于机器学习的酒店评论情感分析 | 支持GPU/CPU训练 | 实时反馈与增量学习</p>
             <div class="badge">
-                <i class="fas fa-microchip"></i> 支持GPU加速 | <i class="fas fa-database"></i> 微博10万条数据集
+                <i class="fas fa-microchip"></i> 支持GPU加速 | <i class="fas fa-database"></i> 7000+条酒店评价数据集
             </div>
         </header>
 
@@ -25,7 +25,7 @@
 
                     <div class="form-group">
                         <label for="text-input">输入要分析的文本：</label>
-                        <textarea id="text-input" placeholder="请输入一段中文文本，例如：这部电影真是太精彩了，演员演技出色，剧情扣人心弦！"></textarea>
+                        <textarea id="text-input" placeholder="请输入一段中文文本，例如：酒店服务贴心周到，环境整洁舒适，入住体验非常满意！"></textarea>
                         <div class="char-count">
                             <span id="char-count">0</span> 字符
                         </div>
@@ -268,12 +268,12 @@
                         <pre><code># 预测情感
 curl -X POST http://localhost:5000/api/predict \
   -H "Content-Type: application/json" \
-  -d '{"text": "这部电影真好看"}'
+  -d '{"text": "这家酒店真不错"}'
 
 # 提交反馈
 curl -X POST http://localhost:5000/api/feedback \
   -H "Content-Type: application/json" \
-  -d '{"text": "这部电影真好看", "choice": "符合"}'
+  -d '{"text": "这家酒店真不错", "choice": "符合"}'
 
 # 开始训练
 curl -X POST http://localhost:5000/api/train \
@@ -285,7 +285,7 @@ curl -X POST http://localhost:5000/api/train \
         </div>
 
         <footer>
-            <p>© 2023 情感分析应用 | 本科课程大作业 | 基于 Flask + Scikit-learn + PyTorch</p>
+            <p>© 2025 情感分析应用 | 人工智能应用课程大作业 | 基于 Flask + Scikit-learn + PyTorch</p>
             <p>后端API: http://localhost:5000 | 支持GPU/CPU训练 | 实时增量学习</p>
             <div class="footer-note">
                 <i class="fas fa-exclamation-circle"></i>

@@ -42,3 +42,39 @@ TRAINING_CONFIG = {
     'random_state': 42,
     'epochs': 5
 }
+
+# 模型类型配置
+MODEL_TYPES = {
+    'sgd_tfidf': {
+        'name': 'TF-IDF + SGD分类器',
+        'description': '传统机器学习方法，速度快，适合小数据',
+        'requires_vectorizer': True
+    },
+    'random_forest': {
+        'name': 'TF-IDF + 随机森林',
+        'description': '集成学习方法，抗过拟合能力强',
+        'requires_vectorizer': True
+    },
+    'svm_tfidf': {
+        'name': 'TF-IDF + SVM',
+        'description': '支持向量机，适合高维特征',
+        'requires_vectorizer': True
+    },
+    'logistic_regression': {
+        'name': 'TF-IDF + 逻辑回归',
+        'description': '简单高效的线性模型',
+        'requires_vectorizer': True
+    }
+}
+
+# 图表配置
+CHART_CONFIG = {
+    'colors': {
+        'train': '#667eea',
+        'valid': '#00b09b',
+        'test': '#ff416c',
+        'baseline': '#ffb347',
+        'new_model': '#764ba2'
+    },
+    'max_points': 100
+}

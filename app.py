@@ -3,7 +3,7 @@
 """
 情感分析应用 - 后端主程序
 支持TF-IDF + SGDClassifier模型
-适配中文微博数据集
+适配中文酒店评论数据集
 """
 
 import os
@@ -25,6 +25,14 @@ from sklearn.metrics import accuracy_score, f1_score
 import jieba
 import joblib
 import warnings
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import SVC
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report, confusion_matrix
+import matplotlib.pyplot as plt
+import seaborn as sns
+import base64
+from io import BytesIO
 
 warnings.filterwarnings('ignore')
 
@@ -40,6 +48,8 @@ current_vectorizer = None
 current_model_name = None
 current_model_time = None
 training_in_progress = False
+current_model_type = 'sgd_tfidf'  # 当前使用的模型类型
+training_history = []  # 训练历史记录
 
 # 新增：训练阈值控制相关变量
 current_feedback_threshold = 0  # 记录上次训练时的反馈数量阈值
@@ -272,11 +282,14 @@ def reset_training_status():
     }
 
 
-def train_model_incremental(use_gpu=False, epochs=5, batch_size=32):
-    """增量训练模型（使用基础数据 + 反馈数据）"""
+def train_model_incremental(use_gpu=False, epochs=5, batch_size=32, model_type='sgd_tfidf'):
+    """增量训练模型（支持多种模型类型）"""
     global training_in_progress, training_status, current_model, current_vectorizer
-    global current_model_name, current_model_time, training_start_time
-    global last_training_feedback_count  # 新增：记录训练时的反馈数量
+    global current_model_name, current_model_time, training_start_time, current_model_type
+    global last_training_feedback_count, training_history
+
+    # 更新当前模型类型
+    current_model_type = model_type
 
     # 重置训练状态
     reset_training_status()
@@ -366,43 +379,86 @@ def train_model_incremental(use_gpu=False, epochs=5, batch_size=32):
         X_train_vec = vectorizer.fit_transform(X_train)
         X_val_vec = vectorizer.transform(X_val)
 
-        # 6. 训练模型（分轮次训练，使用用户指定的epochs）
-        training_status['current_epoch'] = 0
+        # 6. 根据模型类型选择不同的分类器
+        training_status['message'] = f'正在初始化{model_type}模型...'
 
-        # 创建新模型
-        model = SGDClassifier(
-            loss='log_loss',
-            max_iter=1,  # 每次只训练一个epoch
-            tol=1e-3,
-            random_state=42,
-            warm_start=True,  # 允许增量训练
-            n_jobs=-1 if use_gpu else 1
-        )
+        if model_type == 'sgd_tfidf':
+            model = SGDClassifier(
+                loss='log_loss',
+                max_iter=1,
+                tol=1e-3,
+                random_state=42,
+                warm_start=True,
+                n_jobs=-1 if use_gpu else 1
+            )
+        elif model_type == 'random_forest':
+            model = RandomForestClassifier(
+                n_estimators=100,
+                max_depth=None,
+                min_samples_split=2,
+                random_state=42,
+                n_jobs=-1 if use_gpu else -1
+            )
+        elif model_type == 'svm_tfidf':
+            model = SVC(
+                kernel='linear',
+                probability=True,
+                random_state=42
+            )
+        elif model_type == 'logistic_regression':
+            model = LogisticRegression(
+                max_iter=1000,
+                random_state=42,
+                n_jobs=-1 if use_gpu else 1
+            )
+        else:
+            model = SGDClassifier(
+                loss='log_loss',
+                max_iter=1,
+                tol=1e-3,
+                random_state=42,
+                warm_start=True
+            )
 
         # 记录每轮的性能
         epoch_accuracies = []
         epoch_losses = []
+        val_accuracies = []
+        train_accuracies = []
 
         for epoch in range(epochs):
             training_status['current_epoch'] = epoch + 1
-            training_status['message'] = f'正在训练第 {epoch + 1}/{epochs} 轮...'
+            training_status['message'] = f'正在训练{model_type}第 {epoch + 1}/{epochs} 轮...'
 
-            # 训练一个epoch
-            if epoch == 0:
+            # 训练模型
+            if model_type in ['sgd_tfidf', 'logistic_regression'] and epoch > 0:
+                model.partial_fit(X_train_vec, y_train, classes=np.unique(y_train))
+            elif epoch == 0:
                 model.fit(X_train_vec, y_train)
             else:
-                model.partial_fit(X_train_vec, y_train, classes=np.unique(y_train))
+                # 对于不支持增量学习的模型，重新训练
+                if hasattr(model, 'warm_start') and model.warm_start:
+                    model.fit(X_train_vec, y_train)
 
             # 评估当前模型
             y_pred = model.predict(X_val_vec)
             accuracy = accuracy_score(y_val, y_pred)
 
-            # 计算损失（对数损失）
-            y_proba = model.predict_proba(X_val_vec)
-            loss = -np.mean(np.log(y_proba[np.arange(len(y_val)), y_val] + 1e-10))
+            # 计算训练集准确率
+            y_train_pred = model.predict(X_train_vec)
+            train_accuracy = accuracy_score(y_train, y_train_pred)
+
+            # 计算损失
+            if hasattr(model, 'predict_proba'):
+                y_proba = model.predict_proba(X_val_vec)
+                loss = -np.mean(np.log(y_proba[np.arange(len(y_val)), y_val] + 1e-10))
+            else:
+                loss = 1 - accuracy
 
             epoch_accuracies.append(accuracy)
             epoch_losses.append(loss)
+            val_accuracies.append(accuracy)
+            train_accuracies.append(train_accuracy)
 
             # 更新训练状态
             elapsed_time = time.time() - training_start_time
@@ -415,13 +471,13 @@ def train_model_incremental(use_gpu=False, epochs=5, batch_size=32):
             training_status['current_acc'] = accuracy
             training_status['current_loss'] = loss
 
-            # 每轮之间稍作延迟，模拟训练过程
+            # 每轮之间稍作延迟
             time.sleep(1)
 
-        # 7. 保存新模型
+        # 7. 保存新模型（在文件名中加入模型类型）
         timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-        model_path = MODELS_DIR / f'model_{timestamp}.pkl'
-        vectorizer_path = MODELS_DIR / f'vectorizer_{timestamp}.pkl'
+        model_path = MODELS_DIR / f'model_{model_type}_{timestamp}.pkl'
+        vectorizer_path = MODELS_DIR / f'vectorizer_{model_type}_{timestamp}.pkl'
 
         joblib.dump(model, model_path)
         joblib.dump(vectorizer, vectorizer_path)
@@ -451,28 +507,32 @@ def train_model_incremental(use_gpu=False, epochs=5, batch_size=32):
 
         print(f"训练完成时反馈数量: {feedback_count_after_training}")
 
-        # 10. 记录训练日志
-        log_entry = {
+        # 10. 记录训练历史（用于图表）
+        history_entry = {
             'timestamp': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'model_type': model_type,
             'model_name': current_model_name,
-            'dataset': 'incremental',
-            'base_samples': len(df_base),
-            'feedback_samples': len(df_feedback),
-            'total_samples': len(df_all),
             'epochs': epochs,
-            'batch_size': batch_size,
+            'final_val_accuracy': float(accuracy),
+            'final_train_accuracy': float(train_accuracy),
+            'final_loss': float(loss),
             'epoch_accuracies': [float(acc) for acc in epoch_accuracies],
             'epoch_losses': [float(loss) for loss in epoch_losses],
-            'final_accuracy': float(accuracy),
-            'final_loss': float(loss),
-            'use_gpu': use_gpu,
-            'training_time': time.time() - training_start_time,
-            'feedback_count_at_training': feedback_count_after_training  # 新增
+            'val_accuracies': [float(acc) for acc in val_accuracies],
+            'train_accuracies': [float(acc) for acc in train_accuracies],
+            'feedback_count': feedback_count_after_training,
+            'use_gpu': use_gpu
         }
 
-        log_file = LOGS_DIR / f'training_{timestamp}.txt'
-        with open(log_file, 'w', encoding='utf-8') as f:
-            json.dump(log_entry, f, ensure_ascii=False, indent=2)
+        training_history.append(history_entry)
+
+        # 保存训练历史
+        history_file = LOGS_DIR / 'training_history.json'
+        with open(history_file, 'w', encoding='utf-8') as f:
+            json.dump(training_history[-100:], f, ensure_ascii=False, indent=2)  # 只保存最近100次
+
+        # 生成对比图表
+        generate_comparison_charts()
 
         training_status['message'] = f'训练完成！最终准确率: {accuracy:.4f}'
         print(f"增量训练完成，新模型: {current_model_name}")
@@ -664,9 +724,138 @@ def count_valid_feedback(unique_only=True):
                 continue
         return total_valid
 
-
 # 初始化加载模型
 load_latest_model()
+
+def generate_comparison_charts():
+    """生成模型对比和训练历史图表"""
+    if not training_history:
+        return
+
+    # 创建图表目录
+    charts_dir = LOGS_DIR / 'charts'
+    charts_dir.mkdir(exist_ok=True)
+
+    try:
+        # 1. 不同模型性能对比图
+        plt.figure(figsize=(12, 8))
+
+        # 按模型类型分组
+        model_performance = {}
+        for entry in training_history[-20:]:  # 最近20次训练
+            model_type = entry['model_type']
+            if model_type not in model_performance:
+                model_performance[model_type] = []
+            model_performance[model_type].append(entry['final_val_accuracy'])
+
+        # 绘制箱线图
+        data = []
+        labels = []
+        for model_type, accuracies in model_performance.items():
+            if accuracies:  # 只添加有数据的模型
+                data.append(accuracies)
+                labels.append(MODEL_TYPES.get(model_type, {}).get('name', model_type))
+
+        if data:
+            plt.boxplot(data, labels=labels)
+            plt.title('不同模型性能对比')
+            plt.ylabel('验证集准确率')
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            plt.savefig(charts_dir / 'model_comparison.png', dpi=100, bbox_inches='tight')
+            plt.close()
+
+        # 2. 训练历史趋势图
+        plt.figure(figsize=(14, 10))
+
+        # 创建子图
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(14, 10))
+
+        # 2.1 准确率趋势
+        recent_history = training_history[-10:]  # 最近10次训练
+        if len(recent_history) >= 2:
+            timestamps = [h['timestamp'][-8:] for h in recent_history]  # 只取时间部分
+            val_accs = [h['final_val_accuracy'] for h in recent_history]
+            train_accs = [h['final_train_accuracy'] for h in recent_history]
+
+            ax1.plot(timestamps, val_accs, 'o-', label='验证集', color='#00b09b', linewidth=2)
+            ax1.plot(timestamps, train_accs, 's-', label='训练集', color='#667eea', linewidth=2)
+            ax1.set_title('训练准确率趋势')
+            ax1.set_xlabel('训练时间')
+            ax1.set_ylabel('准确率')
+            ax1.legend()
+            ax1.grid(True, alpha=0.3)
+            ax1.set_ylim(0.5, 1.0)
+
+        # 2.2 损失趋势
+        if len(recent_history) >= 2:
+            losses = [h['final_loss'] for h in recent_history]
+            ax2.plot(timestamps, losses, 'o-', color='#ff416c', linewidth=2)
+            ax2.set_title('训练损失趋势')
+            ax2.set_xlabel('训练时间')
+            ax2.set_ylabel('损失值')
+            ax2.grid(True, alpha=0.3)
+
+        # 2.3 反馈数据增长
+        feedback_counts = [h['feedback_count'] for h in recent_history]
+        if len(recent_history) >= 2:
+            ax3.bar(timestamps, feedback_counts, color='#ffb347', alpha=0.7)
+            ax3.set_title('训练时的反馈数据量')
+            ax3.set_xlabel('训练时间')
+            ax3.set_ylabel('反馈数量')
+            ax3.tick_params(axis='x', rotation=45)
+
+        # 2.4 模型类型分布
+        if len(training_history) > 0:
+            model_counts = {}
+            for entry in training_history:
+                model_type = entry['model_type']
+                model_counts[model_type] = model_counts.get(model_type, 0) + 1
+
+            if model_counts:
+                model_names = [MODEL_TYPES.get(k, {}).get('name', k) for k in model_counts.keys()]
+                counts = list(model_counts.values())
+
+                colors = ['#667eea', '#00b09b', '#ff416c', '#ffb347', '#764ba2']
+                ax4.pie(counts, labels=model_names, autopct='%1.1f%%',
+                        colors=colors[:len(counts)], startangle=90)
+                ax4.set_title('模型使用分布')
+                ax4.axis('equal')
+
+        plt.suptitle('训练历史分析', fontsize=16)
+        plt.tight_layout()
+        plt.savefig(charts_dir / 'training_history.png', dpi=100, bbox_inches='tight')
+        plt.close()
+
+        # 3. 单次训练详细曲线（最后一次训练）
+        last_training = training_history[-1]
+        if 'epoch_accuracies' in last_training:
+            plt.figure(figsize=(10, 6))
+
+            epochs = range(1, len(last_training['epoch_accuracies']) + 1)
+
+            plt.plot(epochs, last_training['epoch_accuracies'], 'o-',
+                     label='验证准确率', color='#00b09b', linewidth=2)
+
+            if 'train_accuracies' in last_training:
+                plt.plot(epochs, last_training['train_accuracies'], 's-',
+                         label='训练准确率', color='#667eea', linewidth=2)
+
+            plt.plot(epochs, last_training['epoch_losses'], '^-',
+                     label='损失值', color='#ff416c', linewidth=2)
+
+            plt.title(
+                f"训练曲线 - {MODEL_TYPES.get(last_training['model_type'], {}).get('name', last_training['model_type'])}")
+            plt.xlabel('训练轮次')
+            plt.ylabel('指标值')
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(charts_dir / 'last_training_curve.png', dpi=100, bbox_inches='tight')
+            plt.close()
+
+    except Exception as e:
+        print(f"生成图表失败: {e}")
 
 
 # API路由
@@ -1167,6 +1356,86 @@ def training_threshold_info():
             'success': False,
             'error': str(e)
         }), 500
+
+
+@app.route('/api/training_charts', methods=['GET'])
+def get_training_charts():
+    """获取训练图表数据"""
+    try:
+        charts_dir = LOGS_DIR / 'charts'
+
+        # 检查图表文件是否存在
+        chart_files = {}
+        for chart_name in ['model_comparison.png', 'training_history.png', 'last_training_curve.png']:
+            chart_path = charts_dir / chart_name
+            if chart_path.exists():
+                # 将图片转换为base64
+                with open(chart_path, 'rb') as f:
+                    img_data = base64.b64encode(f.read()).decode('utf-8')
+                chart_files[chart_name] = f"data:image/png;base64,{img_data}"
+
+        return jsonify({
+            'success': True,
+            'charts': chart_files,
+            'has_charts': len(chart_files) > 0
+        })
+
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+@app.route('/api/training_history', methods=['GET'])
+def get_training_history():
+    """获取训练历史数据（用于前端图表）"""
+    try:
+        # 加载训练历史
+        history_file = LOGS_DIR / 'training_history.json'
+        if history_file.exists():
+            with open(history_file, 'r', encoding='utf-8') as f:
+                history_data = json.load(f)
+        else:
+            history_data = []
+
+        # 准备图表数据
+        chart_data = {
+            'timeline': [],
+            'val_accuracies': [],
+            'train_accuracies': [],
+            'losses': [],
+            'feedback_counts': [],
+            'model_types': []
+        }
+
+        for entry in history_data[-20:]:  # 最近20次
+            chart_data['timeline'].append(entry['timestamp'][11:19])  # 只取时间
+            chart_data['val_accuracies'].append(entry['final_val_accuracy'])
+            chart_data['train_accuracies'].append(entry.get('final_train_accuracy', 0))
+            chart_data['losses'].append(entry['final_loss'])
+            chart_data['feedback_counts'].append(entry['feedback_count'])
+            chart_data['model_types'].append(entry['model_type'])
+
+        return jsonify({
+            'success': True,
+            'history': history_data[-10:],  # 返回最近10次详细记录
+            'chart_data': chart_data,
+            'model_types': MODEL_TYPES
+        })
+
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+@app.route('/api/model_types', methods=['GET'])
+def get_model_types():
+    """获取可用的模型类型"""
+    return jsonify({
+        'success': True,
+        'model_types': MODEL_TYPES
+    })
 
 
 if __name__ == '__main__':
