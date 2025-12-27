@@ -57,13 +57,14 @@ current_vectorizer = None
 current_model_name = None
 current_model_time = None
 training_in_progress = False
-current_model_type = 'sgd_tfidf'  # 当前使用的模型类型
+current_model_type = 'sgd_tfidf'  # 当前使用的模型类
 training_history = []  # 训练历史记录
 
 # 新增：训练阈值控制相关变量
-current_feedback_threshold = 0  # 记录上次训练时的反馈数量阈值
 last_training_feedback_count = 0  # 记录上次训练时的反馈数量
 TRAINING_TRIGGER_THRESHOLD = 10  # 触发训练的阈值（10条新反馈）
+
+current_feedback_threshold = 0
 
 training_status = {
     'is_running': False,
@@ -1622,7 +1623,7 @@ if __name__ == '__main__':
     total_unique = count_all_feedback(unique_only=True)
     valid_unique = count_valid_feedback(unique_only=True)
 
-    # 修复：正确的计算方法
+    # 修 复：正确的计算方法
     # 下次训练需要的反馈总数 = 上次训练时的反馈数 + 10
     next_training_target = last_training_feedback_count + TRAINING_TRIGGER_THRESHOLD
 
