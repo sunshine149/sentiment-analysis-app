@@ -5,6 +5,15 @@
 支持TF-IDF + SGDClassifier模型
 适配中文酒店评论数据集
 """
+# ========== 关键：在导入任何其他库之前设置matplotlib后端 ==========
+import matplotlib
+matplotlib.use('Agg')  # 使用非GUI后端
+# =============================================================
+
+# ========== 禁用Tkinter的后台线程 ==========
+import os
+os.environ['PYTHONWARNINGS'] = 'ignore'
+os.environ['MPLCONFIGDIR'] = '/tmp'  # 避免matplotlib配置文件冲突
 
 import os
 import json
@@ -1126,15 +1135,16 @@ def session_end():
         # 计算自上次训练以来的新增反馈数量
         new_feedback_since_last_training = current_feedback_count - last_training_feedback_count
 
-        # 计算需要达到的阈值
-        required_feedback_for_training = current_feedback_threshold + TRAINING_TRIGGER_THRESHOLD
+        # 修复：计算下次训练需要的目标值
+        next_training_target = last_training_feedback_count + TRAINING_TRIGGER_THRESHOLD
+        remaining_for_next = max(0, next_training_target - current_feedback_count)
 
         # 检查是否满足训练条件
-        # 条件1: 当前反馈数量 >= 阈值 + 10
+        # 条件1: 当前反馈数量 >= 上次训练时的反馈数量 + 10
         # 条件2: 自上次训练以来新增了至少10条反馈
         # 条件3: 训练不在进行中
         should_trigger_training = (
-                current_feedback_count >= required_feedback_for_training and
+                current_feedback_count >= next_training_target and
                 new_feedback_since_last_training >= TRAINING_TRIGGER_THRESHOLD and
                 not training_in_progress
         )
@@ -1145,14 +1155,14 @@ def session_end():
             'total_unique_valid_feedback': current_feedback_count,
             'last_training_feedback_count': last_training_feedback_count,
             'new_feedback_since_last_training': new_feedback_since_last_training,
-            'current_threshold': current_feedback_threshold,
-            'required_for_next_training': required_feedback_for_training,
+            'next_training_target': next_training_target,
+            'remaining_for_next_training': remaining_for_next,
             'triggered_training': False
         }
 
         if should_trigger_training:
-            # 更新阈值和上次训练时的反馈数量
-            current_feedback_threshold = required_feedback_for_training
+            # 修复：更新阈值和上次训练时的反馈数量
+            current_feedback_threshold = current_feedback_count  # 阈值设为当前总数
             last_training_feedback_count = current_feedback_count
 
             # 保存阈值信息
@@ -1175,7 +1185,8 @@ def session_end():
             response_data.update({
                 'triggered_training': True,
                 'message': f'检测到 {new_feedback_since_last_training} 条新反馈（总计 {current_feedback_count} 条），已触发自动训练',
-                'new_threshold_set': current_feedback_threshold
+                'new_threshold_set': current_feedback_threshold,
+                'next_training_target_after_this': current_feedback_count + TRAINING_TRIGGER_THRESHOLD
             })
             print(f"自动训练触发: {new_feedback_since_last_training} 条新反馈，设置新阈值: {current_feedback_threshold}")
 
@@ -1441,15 +1452,18 @@ def training_threshold_info():
 
         current_count = count_valid_feedback(unique_only=True)
         new_feedback_since_last = current_count - threshold_data.get('feedback_count', 0)
-        required_for_next = threshold_data.get('threshold', 0) + TRAINING_TRIGGER_THRESHOLD
+
+        # 修复：正确的计算方法
+        next_training_target = threshold_data.get('feedback_count', 0) + TRAINING_TRIGGER_THRESHOLD
+        remaining_for_next = max(0, next_training_target - current_count)
 
         return jsonify({
             'success': True,
             'threshold_info': threshold_data,
             'current_feedback_count': current_count,
             'new_feedback_since_last_training': new_feedback_since_last,
-            'required_feedback_for_next_training': required_for_next,
-            'remaining_for_next_training': max(0, required_for_next - current_count),
+            'next_training_target': next_training_target,
+            'remaining_for_next_training': remaining_for_next,
             'trigger_threshold': TRAINING_TRIGGER_THRESHOLD
         })
 
@@ -1599,7 +1613,7 @@ if __name__ == '__main__':
                 current_feedback_threshold = threshold_data.get('threshold', 0)
                 last_training_feedback_count = threshold_data.get('feedback_count', 0)
                 print(
-                    f"加载阈值信息: 阈值={current_feedback_threshold}, 上次训练时反馈数={last_training_feedback_count}")
+                    f"上次训练时反馈数={last_training_feedback_count}")
         except Exception as e:
             print(f"加载阈值信息失败: {e}")
 
@@ -1608,16 +1622,20 @@ if __name__ == '__main__':
     total_unique = count_all_feedback(unique_only=True)
     valid_unique = count_valid_feedback(unique_only=True)
 
-    # 计算距离下次训练还需要多少反馈
-    required_for_next = current_feedback_threshold + TRAINING_TRIGGER_THRESHOLD
-    remaining = max(0, required_for_next - valid_unique)
+    # 修复：正确的计算方法
+    # 下次训练需要的反馈总数 = 上次训练时的反馈数 + 10
+    next_training_target = last_training_feedback_count + TRAINING_TRIGGER_THRESHOLD
+
+    # 还需要多少新反馈 = 目标值 - 当前实际值（但不能小于0）
+    remaining = max(0, next_training_target - valid_unique)
 
     print(f"反馈数据统计:")
     print(f"  原始数据: {total_raw} 条")
     print(f"  去重后: {total_unique} 条")
     print(f"  有效反馈(去重后): {valid_unique} 条")
     print(f"  重复数据: {total_raw - total_unique} 条")
-    print(f"  当前阈值: {current_feedback_threshold}")
+    print(f"  上次训练时反馈数: {last_training_feedback_count}")
+    print(f"  下次训练目标值: {next_training_target} 条")
     print(f"  距离下次自动训练还需: {remaining} 条新反馈")
     print("=" * 50)
 
@@ -1625,5 +1643,27 @@ if __name__ == '__main__':
     for directory in [DATA_DIR, FEEDBACK_DIR, MODELS_DIR, LOGS_DIR]:
         directory.mkdir(exist_ok=True)
 
-    # 启动Flask应用
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # ========== 方案1：修复启动问题 ==========
+    print("正在启动服务器...")
+    print("=" * 50)
+
+    try:
+        # 关键：禁用调试和重载，使用单线程
+        app.run(
+            host='0.0.0.0',
+            port=5000,
+            debug=False,  # 禁用debug模式（避免自动重载）
+            use_reloader=False,  # 禁用代码变更自动重载
+            threaded=False,  # 使用单线程模式
+            processes=1  # 单进程
+        )
+    except KeyboardInterrupt:
+        print("\n" + "=" * 50)
+        print("服务器已正常停止")
+        print("=" * 50)
+    except Exception as e:
+        print(f"\n服务器错误: {e}")
+        import traceback
+
+        traceback.print_exc()
+    # =====================================
